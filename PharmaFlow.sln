@@ -1,4 +1,5 @@
-﻿Microsoft Visual Studio Solution File, Format Version 12.00
+
+Microsoft Visual Studio Solution File, Format Version 12.00
 # Visual Studio Version 17
 VisualStudioVersion = 17.0.31903.59
 MinimumVisualStudioVersion = 10.0.40219.1
@@ -10,7 +11,7 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "PharmaFlow.Application", "s
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "PharmaFlow.Infrastructure", "src\PharmaFlow.Infrastructure\PharmaFlow.Infrastructure.csproj", "{C0141E94-15BC-4447-B313-BECB02317D42}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "PharmaFlow.WPF", "src\PharmaFlow.WPF\PharmaFlow.WPF.csproj", "{FBFD0740-C5C4-4C6F-9414-CEB6777BC7D3}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "PharmaFlow.WebApi", "src\PharmaFlow.WebApi\PharmaFlow.WebApi.csproj", "{A8C2D5E7-1F3B-4C9D-A6E8-2B4D7F9A1C3E}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
@@ -33,15 +34,15 @@ Global
 		{C0141E94-15BC-4447-B313-BECB02317D42}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{C0141E94-15BC-4447-B313-BECB02317D42}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{C0141E94-15BC-4447-B313-BECB02317D42}.Release|Any CPU.Build.0 = Release|Any CPU
-		{FBFD0740-C5C4-4C6F-9414-CEB6777BC7D3}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
-		{FBFD0740-C5C4-4C6F-9414-CEB6777BC7D3}.Debug|Any CPU.Build.0 = Debug|Any CPU
-		{FBFD0740-C5C4-4C6F-9414-CEB6777BC7D3}.Release|Any CPU.ActiveCfg = Release|Any CPU
-		{FBFD0740-C5C4-4C6F-9414-CEB6777BC7D3}.Release|Any CPU.Build.0 = Release|Any CPU
+		{A8C2D5E7-1F3B-4C9D-A6E8-2B4D7F9A1C3E}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{A8C2D5E7-1F3B-4C9D-A6E8-2B4D7F9A1C3E}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{A8C2D5E7-1F3B-4C9D-A6E8-2B4D7F9A1C3E}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{A8C2D5E7-1F3B-4C9D-A6E8-2B4D7F9A1C3E}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(NestedProjects) = preSolution
 		{62342F0D-6A46-4F90-B7CD-546C98200C1B} = {D168E9F5-D32C-415C-9BBA-BA42A4954EE8}
 		{4B7E8611-C62B-45E9-A7DF-0EBC98CBFAB7} = {D168E9F5-D32C-415C-9BBA-BA42A4954EE8}
 		{C0141E94-15BC-4447-B313-BECB02317D42} = {D168E9F5-D32C-415C-9BBA-BA42A4954EE8}
-		{FBFD0740-C5C4-4C6F-9414-CEB6777BC7D3} = {D168E9F5-D32C-415C-9BBA-BA42A4954EE8}
+		{A8C2D5E7-1F3B-4C9D-A6E8-2B4D7F9A1C3E} = {D168E9F5-D32C-415C-9BBA-BA42A4954EE8}
 	EndGlobalSection
 EndGlobal
