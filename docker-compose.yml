@@ -1,0 +1,61 @@
+version: "3.8"
+
+services:
+  # ============================================
+  # PostgreSQL 数据库
+  # ============================================
+  postgres:
+    image: postgres:16-alpine
+    container_name: pharmaflow-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: PharmaFlow
+      POSTGRES_USER: pharmaflow
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-ChangeMe!2024}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      - "127.0.0.1:5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U pharmaflow -d PharmaFlow"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ============================================
+  # ASP.NET Core 后端 API
+  # ============================================
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    container_name: pharmaflow-api
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      - ASPNETCORE_ENVIRONMENT=Production
+      - DatabaseProvider=PostgreSQL
+      - ConnectionStrings__PostgreSQL=Host=postgres;Port=5432;Database=PharmaFlow;Username=pharmaflow;Password=${DB_PASSWORD:-ChangeMe!2024}
+      - Jwt__SecretKey=${JWT_SECRET:-PharmaFlow-Prod-Secret-ChangeMe!}
+    ports:
+      - "127.0.0.1:5000:5000"
+
+  # ============================================
+  # React 前端 (Nginx)
+  # ============================================
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+    container_name: pharmaflow-web
+    restart: unless-stopped
+    depends_on:
+      - backend
+    ports:
+      - "80:80"
+
+volumes:
+  pgdata:
+    driver: local

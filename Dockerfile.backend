@@ -1,0 +1,38 @@
+# ============================================
+# Stage 1: Build
+# ============================================
+FROM mcr.microsoft.com/dotnet/sdk:8.0 AS build
+WORKDIR /src
+
+# 还原依赖（利用 Docker 缓存层）
+COPY src/PharmaFlow.Domain/PharmaFlow.Domain.csproj   PharmaFlow.Domain/
+COPY src/PharmaFlow.Application/PharmaFlow.Application.csproj   PharmaFlow.Application/
+COPY src/PharmaFlow.Infrastructure/PharmaFlow.Infrastructure.csproj   PharmaFlow.Infrastructure/
+COPY src/PharmaFlow.WebApi/PharmaFlow.WebApi.csproj   PharmaFlow.WebApi/
+
+RUN dotnet restore PharmaFlow.WebApi/PharmaFlow.WebApi.csproj
+
+# 复制源码并编译
+COPY src/ ./
+RUN dotnet publish PharmaFlow.WebApi/PharmaFlow.WebApi.csproj \
+    -c Release -o /app --no-restore
+
+# ============================================
+# Stage 2: Runtime
+# ============================================
+FROM mcr.microsoft.com/dotnet/aspnet:8.0 AS runtime
+WORKDIR /app
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates curl && \
+    rm -rf /var/lib/apt/lists/*
+
+COPY --from=build /app ./
+
+EXPOSE 5000
+ENV ASPNETCORE_URLS=http://+:5000
+
+HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
+    CMD curl -f http://localhost:5000/swagger/index.html || exit 1
+
+ENTRYPOINT ["dotnet", "PharmaFlow.WebApi.dll"]
