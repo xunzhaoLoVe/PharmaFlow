@@ -1,0 +1,6 @@
+@PharmaFlow.WebApi_HostAddress = http://localhost:5009
+
+GET {{PharmaFlow.WebApi_HostAddress}}/weatherforecast/
+Accept: application/json
+
+###
