@@ -63,7 +63,8 @@ public static class JwtTokenHelper
         string username,
         string role,
         List<string> permissions,
-        IConfiguration configuration)
+        IConfiguration configuration,
+        int? hoursOverride = null)
     {
         var key = new SymmetricSecurityKey(
             Encoding.UTF8.GetBytes(configuration["Jwt:SecretKey"]
@@ -79,7 +80,7 @@ public static class JwtTokenHelper
         foreach (var perm in permissions)
             claims.Add(new Claim("permission", perm));
 
-        var hours = int.Parse(configuration["Jwt:ExpirationHours"] ?? "24");
+        var hours = hoursOverride ?? int.Parse(configuration["Jwt:ExpirationHours"] ?? "24");
         var token = new JwtSecurityToken(
             issuer: configuration["Jwt:Issuer"] ?? "PharmaFlow",
             audience: configuration["Jwt:Audience"] ?? "PharmaFlow",

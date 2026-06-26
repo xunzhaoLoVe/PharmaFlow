@@ -3,10 +3,12 @@ import { Table, Button, Space, Input, Modal, Form, message, Popconfirm, Upload }
 import { PlusOutlined, SearchOutlined, UploadOutlined } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
 import * as XLSX from 'xlsx';
+import { useAuthStore } from '../../store/authStore';
 import { getDrugs, createDrug, updateDrug, deleteDrug } from '../../api/drugs';
 import type { DrugDto } from '../../types';
 
 export default function DrugListPage() {
+  const canWrite = useAuthStore(s => s.canWrite);
   const [data, setData] = useState<DrugDto[]>([]);
   const [loading, setLoading] = useState(false);
   const [search, setSearch] = useState('');
@@ -45,25 +47,41 @@ export default function DrugListPage() {
 
   // Excel 导入
   const handleExcelImport = (file: File) => {
+    message.loading('正在解析 Excel...', 0);
     const reader = new FileReader();
     reader.onload = async (e) => {
-      const wb = XLSX.read(e.target?.result, { type: 'array' });
-      const sheet = wb.Sheets[wb.SheetNames[0]];
-      const rows = XLSX.utils.sheet_to_json<Record<string, string>>(sheet, { defval: '' });
-      if (rows.length === 0) { message.warning('Excel 无数据'); return; }
-      const aliases: Record<string, string[]> = {
-        code: ['编码', '药品编码', '代码'],
-        name: ['名称', '药品名称', '药品名'],
-        specification: ['规格', '包装规格'],
-      };
-      let imported = 0, skipped = 0;
-      const headers = Object.keys(rows[0]);
-      const getVal = (field: string) => { for (const a of aliases[field] || []) { for (const h of headers) { if (h.trim() === a) return (row[h] || '').trim(); } } return ''; };
-      for (const row of rows) {
-        const name = getVal('name'); if (!name) { skipped++; continue; }
-        try { await createDrug({ code: getVal('code'), name, specification: getVal('specification') }); imported++; } catch { skipped++; }
+      try {
+        const wb = XLSX.read(e.target?.result, { type: 'array' });
+        const sheet = wb.Sheets[wb.SheetNames[0]];
+        const rows = XLSX.utils.sheet_to_json<Record<string, string>>(sheet, { defval: '' });
+        message.destroy();
+        if (rows.length === 0) { message.warning('Excel 无数据'); return; }
+        const aliases: Record<string, string[]> = {
+          code: ['编码', '药品编码', '代码', 'code'],
+          name: ['名称', '药品名称', '药品名', 'name', '产品名称', '产品'],
+          specification: ['规格', '包装规格', 'specification'],
+        };
+        let imported = 0, skipped = 0, errors: string[] = [];
+        const headers = Object.keys(rows[0]);
+        const getVal = (row: Record<string, string>, field: string) => { for (const a of aliases[field] || []) { for (const h of headers) { if (h.trim() === a) return (row[h] || '').trim(); } } return ''; };
+        for (const row of rows) {
+          const name = getVal(row, 'name'); if (!name) { skipped++; continue; }
+          try { await createDrug({ code: getVal(row, 'code'), name, specification: getVal(row, 'specification') }); imported++; } catch (e: any) { skipped++; errors.push(name + ': ' + (e?.message || '未知错误')); }
+        }
+        if (imported === 0 && skipped > 0 && errors.length > 0) {
+          message.error(`导入失败: ${errors.slice(0, 3).join('; ')}`);
+        } else {
+          message.success(`导入完成: 成功 ${imported} 条, 跳过 ${skipped} 条` + (errors.length > 0 ? ` (前3条错误: ${errors.slice(0, 3).join('; ')})` : ''));
+        }
+        load();
+      } catch (ex: any) {
+        message.destroy();
+        message.error('Excel 解析失败: ' + (ex?.message || '未知错误'));
       }
-      message.success(`导入完成: 成功 ${imported} 条, 跳过 ${skipped} 条`); load();
+    };
+    reader.onerror = () => {
+      message.destroy();
+      message.error('文件读取失败，请检查文件是否损坏');
     };
     reader.readAsArrayBuffer(file);
     return false;
@@ -79,10 +97,10 @@ export default function DrugListPage() {
       filters: [...new Set((filteredData.length > 0 ? filteredData : data).map(d => d.specification).filter(Boolean))].sort().map(s => ({ text: s, value: s })),
       onFilter: (v, r) => (r.specification || '') === (v as string),
     },
-    { title: '操作', width: 150, render: (_, r) => (
+    ...(canWrite ? [{ title: '操作', width: 150, render: (_: any, r: DrugDto) => (
         <Space><Button size="small" onClick={() => handleEdit(r)}>编辑</Button>
           <Popconfirm title="确定删除？" onConfirm={() => handleDelete(r.id)}><Button size="small" danger>删除</Button></Popconfirm></Space>),
-    },
+    }] : []),
   ];
 
   return (
@@ -92,14 +110,14 @@ export default function DrugListPage() {
         <Input placeholder="药品名称" value={search} onChange={e => setSearch(e.target.value)}
           onPressEnter={handleSearch} prefix={<SearchOutlined />} style={{ width: 220 }} allowClear />
         <Button type="primary" onClick={handleSearch}>搜索</Button>
-        <Button type="primary" icon={<PlusOutlined />} onClick={handleAdd}>新增药品</Button>
-        <Upload accept=".xlsx" showUploadList={false} beforeUpload={handleExcelImport}>
+        {canWrite && <Button type="primary" icon={<PlusOutlined />} onClick={handleAdd}>新增药品</Button>}
+        {canWrite && <Upload accept=".xlsx" showUploadList={false} beforeUpload={handleExcelImport}>
           <Button icon={<UploadOutlined />}>导入Excel</Button>
-        </Upload>
+        </Upload>}
       </Space>
       <Table rowKey="id" columns={columns} dataSource={data} loading={loading}
         onChange={(_p, _f, _s, extra) => { setFilteredCount(extra.currentDataSource.length); setFilteredData(extra.currentDataSource as DrugDto[]); }}
-        pagination={{ defaultPageSize: 10, showTotal: () => `共 ${data.length} 条`, showSizeChanger: true }} />
+        pagination={{ defaultPageSize: 10, showTotal: () => `共 ${filteredCount} 条`, showSizeChanger: true }} />
       <Modal title={editing ? '编辑药品' : '新增药品'} open={modalOpen} onOk={handleOk} onCancel={() => setModalOpen(false)}>
         <Form form={form} layout="vertical">
           <Form.Item name="name" label="药品名称" rules={[{ required: true, message: '请输入药品名称' }]}><Input /></Form.Item>

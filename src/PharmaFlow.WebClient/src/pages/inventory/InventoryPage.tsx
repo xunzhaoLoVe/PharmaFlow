@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback } from 'react';
-import { Table, Input, Space, Tag, Tabs } from 'antd';
+import { Table, Input, Button, Space, Tag, Tabs } from 'antd';
 import { SearchOutlined } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
 import apiClient from '../../api/client';
@@ -11,6 +11,8 @@ export default function InventoryPage() {
   const [tab, setTab] = useState('all');
   const [searchCust, setSearchCust] = useState('');
   const [searchBatch, setSearchBatch] = useState('');
+  const [sqCust, setSqCust] = useState('');
+  const [sqBatch, setSqBatch] = useState('');
   const [filteredData, setFilteredData] = useState<InventoryDto[]>([]);
   const [totalCount, setTotalCount] = useState(0);
   const [lowStockCount, setLowStockCount] = useState(0);
@@ -19,12 +21,12 @@ export default function InventoryPage() {
     setLoading(true);
     try {
       const res = await apiClient.get<ApiResponse<PagedResult<InventoryDto>>>('/inventory', {
-        params: { page: 0, size: 99999, search: searchCust || undefined, batchNo: searchBatch || undefined, lowStock: tab === 'lowStock' ? true : undefined },
+        params: { page: 0, size: 99999, search: sqCust || undefined, batchNo: sqBatch || undefined, lowStock: tab === 'lowStock' ? true : undefined },
       });
       setData(res.data!.items);
       if (tab === 'lowStock') setLowStockCount(res.data!.items.length);
     } finally { setLoading(false); }
-  }, [searchCust, searchBatch, tab]);
+  }, [sqCust, sqBatch, tab]);
 
   useEffect(() => { load(); }, [tab]);
 
@@ -70,9 +72,10 @@ export default function InventoryPage() {
       ]} style={{ marginBottom: 8 }} />
       <Space wrap style={{ marginBottom: 16 }}>
         <Input placeholder="客户名称" value={searchCust} onChange={e => setSearchCust(e.target.value)}
-          onPressEnter={() => load()} prefix={<SearchOutlined />} style={{ width: 180 }} allowClear />
+          onPressEnter={() => { setSqCust(searchCust); setSqBatch(searchBatch); }} prefix={<SearchOutlined />} style={{ width: 180 }} allowClear />
         <Input placeholder="批号" value={searchBatch} onChange={e => setSearchBatch(e.target.value)}
-          onPressEnter={() => load()} style={{ width: 140 }} allowClear />
+          onPressEnter={() => { setSqCust(searchCust); setSqBatch(searchBatch); }} style={{ width: 140 }} allowClear />
+        <Button type="primary" icon={<SearchOutlined />} onClick={() => { setSqCust(searchCust); setSqBatch(searchBatch); }}>搜索</Button>
       </Space>
       <Table rowKey={(r,i) => `${r.drugCode}-${r.batchNo}-${r.customerName}-${i}`} columns={columns}
         dataSource={data} loading={loading}

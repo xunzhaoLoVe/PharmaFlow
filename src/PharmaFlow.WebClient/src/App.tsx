@@ -12,6 +12,7 @@ import SalesListPage from './pages/sales/SalesListPage';
 import DistributionPage from './pages/distribution/DistributionPage';
 import ConflictPage from './pages/distribution/ConflictPage';
 import ReportPage from './pages/reports/ReportPage';
+import UserListPage from './pages/users/UserListPage';
 
 function PrivateRoute({ children }: { children: React.ReactNode }) {
   const token = localStorage.getItem('token');
@@ -36,6 +37,7 @@ export default function App() {
             <Route path="distribution" element={<DistributionPage />} />
             <Route path="distribution/conflicts" element={<ConflictPage />} />
             <Route path="reports" element={<ReportPage />} />
+            <Route path="users" element={<UserListPage />} />
           </Route>
         </Routes>
       </BrowserRouter>

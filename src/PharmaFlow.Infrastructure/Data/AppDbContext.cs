@@ -23,6 +23,14 @@ public class AppDbContext : DbContext
     public DbSet<Role> Roles => Set<Role>();
     public DbSet<SystemConfig> SystemConfigs => Set<SystemConfig>();
 
+    protected override void ConfigureConventions(ModelConfigurationBuilder configurationBuilder)
+    {
+        base.ConfigureConventions(configurationBuilder);
+        // 强制所有 DateTime 为 UTC，兼容 PostgreSQL
+        configurationBuilder.Properties<DateTime>()
+            .HaveConversion(typeof(UtcDateTimeConverter));
+    }
+
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         base.OnModelCreating(modelBuilder);

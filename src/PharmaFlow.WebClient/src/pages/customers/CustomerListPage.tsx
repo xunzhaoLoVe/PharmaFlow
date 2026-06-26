@@ -1,6 +1,7 @@
 import { useEffect, useState, useCallback } from 'react';
 import { Table, Button, Space, Input, Modal, Form, message, Popconfirm, Select, Tabs, Upload } from 'antd';
 import { PlusOutlined, SearchOutlined, UploadOutlined, DeleteOutlined } from '@ant-design/icons';
+import { useAuthStore } from '../../store/authStore';
 import apiClient from '../../api/client';
 import type { ColumnsType } from 'antd/es/table';
 import * as XLSX from 'xlsx';
@@ -13,6 +14,7 @@ const DISTRIBUTOR_LEVELS = ['','一级经销商','二级经销商','三级经销
 const END_TYPES = ['卫生院','医院','其他','卫生服务中心','卫生室','药房','门诊','诊所','卫生服务站','二级经销商'];
 
 export default function CustomerListPage() {
+  const canWrite = useAuthStore(s => s.canWrite);
   const [tab, setTab] = useState<string>('distributor');
   const [data, setData] = useState<CustomerDto[]>([]);
   const [loading, setLoading] = useState(false);
@@ -135,10 +137,10 @@ export default function CustomerListPage() {
       filters: DISTRIBUTOR_LEVELS.filter(l => l).map(l => ({ text: l, value: l })),
       onFilter: (v, r) => r.levelName === v,
     },
-    { title: '操作', width: 150, render: (_, r) => (
+    ...(canWrite ? [{ title: '操作', width: 150, render: (_: any, r: any) => (
         <Space><Button size="small" onClick={() => handleEdit(r)}>编辑</Button>
           <Popconfirm title="确定删除？" onConfirm={() => handleDelete(r.id)}><Button size="small" danger>删除</Button></Popconfirm></Space>),
-    },
+    }] : []),
   ];
   const endColumns: ColumnsType<CustomerDto> = [
     { title: '编码', dataIndex: 'code', width: 120 },
@@ -155,10 +157,10 @@ export default function CustomerListPage() {
       filters: END_TYPES.map(t => ({ text: t, value: t })),
       onFilter: (v, r) => r.customerTypeName === v,
     },
-    { title: '操作', width: 150, render: (_, r) => (
+    ...(canWrite ? [{ title: '操作', width: 150, render: (_: any, r: any) => (
         <Space><Button size="small" onClick={() => handleEdit(r)}>编辑</Button>
           <Popconfirm title="确定删除？" onConfirm={() => handleDelete(r.id)}><Button size="small" danger>删除</Button></Popconfirm></Space>),
-    },
+    }] : []),
   ];
 
   return (
@@ -171,19 +173,19 @@ export default function CustomerListPage() {
         <Input placeholder="客户名称/编码" value={search} onChange={e => setSearch(e.target.value)}
           onPressEnter={handleSearch} prefix={<SearchOutlined />} style={{ width: 220 }} allowClear />
         <Button type="primary" onClick={handleSearch}>搜索</Button>
-        <Button type="primary" icon={<PlusOutlined />} onClick={handleAdd}>新增客户</Button>
-        <Upload accept=".xlsx" showUploadList={false} beforeUpload={handleExcelImport}>
+        {canWrite && <Button type="primary" icon={<PlusOutlined />} onClick={handleAdd}>新增客户</Button>}
+        {canWrite && <Upload accept=".xlsx" showUploadList={false} beforeUpload={handleExcelImport}>
           <Button icon={<UploadOutlined />}>导入Excel</Button>
-        </Upload>
-        <Button danger icon={<DeleteOutlined />} onClick={async () => {
+        </Upload>}
+        {canWrite && <Button danger icon={<DeleteOutlined />} onClick={async () => {
           if (window.confirm(`确定清空所有${isDistributor ? '经销商' : '终端客户'}？`)) {
             await apiClient.delete(`/customers/clear?type=${typeFilter}`); message.success('已清空'); load();
           }
-        }}>清空</Button>
+        }}>清空</Button>}
       </Space>
       <Table rowKey="id" columns={isDistributor ? distColumns : endColumns} dataSource={data} loading={loading}
         onChange={(_p, _f, _s, extra) => { setFilteredCount(extra.currentDataSource.length); setFilteredData(extra.currentDataSource as CustomerDto[]); }}
-        pagination={{ defaultPageSize: 10, showTotal: () => `共 ${data.length} 条`, showSizeChanger: true }} />
+        pagination={{ defaultPageSize: 10, showTotal: () => `共 ${filteredCount} 条`, showSizeChanger: true }} />
       <Modal title={editing ? '编辑客户' : '新增客户'} open={modalOpen} onOk={handleOk} onCancel={() => setModalOpen(false)}>
         <Form form={form} layout="vertical">
           <Form.Item name="name" label="客户名称" rules={[{ required: true }]}><Input /></Form.Item>

@@ -1,8 +1,9 @@
 import { useEffect, useState, useCallback } from 'react';
 import { Table, Button, Space, Input, Modal, Form, Select, message, Popconfirm, Upload } from 'antd';
-import { PlusOutlined, UploadOutlined, DeleteOutlined } from '@ant-design/icons';
+import { PlusOutlined, UploadOutlined, DeleteOutlined, SearchOutlined } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
 import * as XLSX from 'xlsx';
+import { useAuthStore } from '../../store/authStore';
 import apiClient from '../../api/client';
 import { getDrugDropdown } from '../../api/drugs';
 import { getCustomerDropdown } from '../../api/customers';
@@ -10,6 +11,7 @@ import { getDistribution, recordDownstream, deleteDistribution } from '../../api
 import type { ApiResponse, DistributionRecordDto, DropdownItem } from '../../types';
 
 export default function SalesListPage() {
+  const canWrite = useAuthStore(s => s.canWrite);
   const [data, setData] = useState<DistributionRecordDto[]>([]);
   const [loading, setLoading] = useState(false);
   const [searchFrom, setSearchFrom] = useState('');
@@ -41,10 +43,14 @@ export default function SalesListPage() {
     setDrugSpecMap(map);
   };
 
-  // 客户端筛选：来源、去向
+  const [filteredCount, setFilteredCount] = useState(0);
+  const [searchFrom2, setSearchFrom2] = useState('');
+  const [searchTo2, setSearchTo2] = useState('');
+
+  // 客户端筛选：来源、去向（点击搜索后生效）
   const filtered = data.filter(item => {
-    if (searchFrom && !(item.fromCustomerName || '').includes(searchFrom)) return false;
-    if (searchTo && !(item.toCustomerName || '').includes(searchTo)) return false;
+    if (searchFrom2 && !(item.fromCustomerName || '').includes(searchFrom2)) return false;
+    if (searchTo2 && !(item.toCustomerName || '').includes(searchTo2)) return false;
     return true;
   });
 
@@ -74,6 +80,7 @@ export default function SalesListPage() {
 
   // Excel 导入
   const handleExcelImport = async (file: File) => {
+    message.loading('正在解析 Excel...', 0);
     const reader = new FileReader();
     reader.onload = async (e) => {
       try {
@@ -122,9 +129,9 @@ export default function SalesListPage() {
           await apiClient.post('/distribution/downstream/batch', dtos.slice(i, i + BATCH));
         }
         message.success(`导入完成: ${dtos.length} 条` + (skipped > 0 ? `, 跳过 ${skipped} 条` : '')); load();
-      } catch (err: any) { message.error('导入失败: ' + (err?.message || '未知错误')); }
+      } catch (err: any) { message.destroy(); message.error('导入失败: ' + (err?.message || '未知错误')); }
     };
-    reader.onerror = () => message.error('文件读取失败');
+    reader.onerror = () => { message.destroy(); message.error('文件读取失败'); };
     reader.readAsArrayBuffer(file);
     return false;
   };
@@ -162,16 +169,18 @@ export default function SalesListPage() {
           style={{ width: 160 }} allowClear />
         <Input placeholder="去向客户" value={searchTo} onChange={e => setSearchTo(e.target.value)}
           style={{ width: 160 }} allowClear />
-        <Button type="primary" icon={<PlusOutlined />} onClick={handleAdd}>录入下游流转</Button>
-        <Upload accept=".xlsx" showUploadList={false} beforeUpload={handleExcelImport}>
+        <Button type="primary" icon={<SearchOutlined />} onClick={() => { setSearchFrom2(searchFrom); setSearchTo2(searchTo); }}>搜索</Button>
+        {canWrite && <Button type="primary" icon={<PlusOutlined />} onClick={handleAdd}>录入下游流转</Button>}
+        {canWrite && <Upload accept=".xlsx" showUploadList={false} beforeUpload={handleExcelImport}>
           <Button icon={<UploadOutlined />}>导入Excel</Button>
-        </Upload>
-        <Button danger icon={<DeleteOutlined />} onClick={async () => {
+        </Upload>}
+        {canWrite && <Button danger icon={<DeleteOutlined />} onClick={async () => {
           if (window.confirm('确定清空销售记录？')) { await apiClient.delete('/distribution/clear?fromSelf=false'); message.success('已清空'); load(); }
-        }}>清空</Button>
+        }}>清空</Button>}
       </Space>
       <Table rowKey="id" columns={columns} dataSource={filtered} loading={loading}
-        pagination={{ defaultPageSize: 10, showTotal: () => `共 ${filtered.length} 条`, showSizeChanger: true }} />
+        onChange={(_p, _f, _s, extra) => setFilteredCount(extra.currentDataSource.length)}
+        pagination={{ defaultPageSize: 10, showTotal: () => `共 ${filteredCount || filtered.length} 条`, showSizeChanger: true }} />
       <Modal title="录入下游流转" open={modalOpen} onOk={handleOk} onCancel={() => setModalOpen(false)} width={560}>
         <Form form={form} layout="vertical">
           <Form.Item name="drugId" label="药品" rules={[{ required: true }]}>

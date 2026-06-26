@@ -273,7 +273,7 @@ export default function DistributionPage() {
       ) : (
         <Table rowKey="id" columns={columns} dataSource={data} loading={loading}
           onChange={(_p, _f, _s, extra) => setFilteredCount(extra.currentDataSource.length)}
-          pagination={{ defaultPageSize: 10, showTotal: () => `共 ${data.length} 条`, showSizeChanger: true }} />
+          pagination={{ defaultPageSize: 10, showTotal: () => `共 ${filteredCount} 条`, showSizeChanger: true }} />
       )}
     </div>
   );

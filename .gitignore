@@ -14,6 +14,7 @@ dist/
 
 # Environment
 .env
+_publish/
 
 # Misc
 *.log

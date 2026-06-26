@@ -23,7 +23,7 @@ public class DrugConfiguration : IEntityTypeConfiguration<Drug>
         builder.ToTable("Drugs");
         builder.HasKey(e => e.Id);
         builder.Property(e => e.Code).HasMaxLength(50).IsRequired();
-        builder.HasIndex(e => e.Code).IsUnique().HasFilter("IsDeleted = 0");
+        builder.HasIndex(e => e.Code).IsUnique().HasFilter("\"IsDeleted\" = false");
         builder.Property(e => e.Name).HasMaxLength(200).IsRequired();
         builder.Property(e => e.GenericName).HasMaxLength(200);
         builder.Property(e => e.Specification).HasMaxLength(100);
@@ -54,7 +54,7 @@ public class CustomerConfiguration : IEntityTypeConfiguration<Customer>
         builder.ToTable("Customers");
         builder.HasKey(e => e.Id);
         builder.Property(e => e.Code).HasMaxLength(50).IsRequired();
-        builder.HasIndex(e => e.Code).IsUnique().HasFilter("IsDeleted = 0");
+        builder.HasIndex(e => e.Code).IsUnique().HasFilter("\"IsDeleted\" = false");
         builder.Property(e => e.Name).HasMaxLength(200).IsRequired();
         builder.Property(e => e.ShortName).HasMaxLength(100);
         builder.Property(e => e.ContactPerson).HasMaxLength(50);
@@ -73,7 +73,7 @@ public class SupplierConfiguration : IEntityTypeConfiguration<Supplier>
         builder.ToTable("Suppliers");
         builder.HasKey(e => e.Id);
         builder.Property(e => e.Code).HasMaxLength(50).IsRequired();
-        builder.HasIndex(e => e.Code).IsUnique().HasFilter("IsDeleted = 0");
+        builder.HasIndex(e => e.Code).IsUnique().HasFilter("\"IsDeleted\" = false");
         builder.Property(e => e.Name).HasMaxLength(200).IsRequired();
         builder.Property(e => e.ContactPerson).HasMaxLength(50);
         builder.Property(e => e.Phone).HasMaxLength(50);

@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Form, Input, Button, Card, message } from 'antd';
+import { Form, Input, Button, Card, message, Checkbox } from 'antd';
 import { UserOutlined, LockOutlined } from '@ant-design/icons';
 import { login } from '../api/auth';
 import { useAuthStore } from '../store/authStore';
@@ -10,7 +10,7 @@ export default function LoginPage() {
   const navigate = useNavigate();
   const authLogin = useAuthStore((s) => s.login);
 
-  const onFinish = async (values: { username: string; password: string }) => {
+  const onFinish = async (values: { username: string; password: string; remember: boolean }) => {
     setLoading(true);
     try {
       const result = await login(values);
@@ -26,8 +26,9 @@ export default function LoginPage() {
       } else {
         message.error(result.message || '登录失败');
       }
-    } catch {
-      message.error('登录失败，请检查用户名和密码');
+    } catch (e: any) {
+      const msg = e?.response?.data?.message || e?.message || '登录失败，请检查用户名和密码';
+      message.error(msg);
     } finally {
       setLoading(false);
     }
@@ -43,12 +44,15 @@ export default function LoginPage() {
           <h1 style={{ fontSize: 28, margin: 0 }}>💊 药品流向管理</h1>
           <p style={{ color: '#999', marginTop: 8 }}>药品流向管理平台</p>
         </div>
-        <Form onFinish={onFinish} size="large">
+        <Form onFinish={onFinish} size="large" initialValues={{ remember: false }}>
           <Form.Item name="username" rules={[{ required: true, message: '请输入用户名' }]}>
-            <Input prefix={<UserOutlined />} placeholder="用户名" />
+            <Input prefix={<UserOutlined />} placeholder="用户名" autoFocus />
           </Form.Item>
           <Form.Item name="password" rules={[{ required: true, message: '请输入密码' }]}>
             <Input.Password prefix={<LockOutlined />} placeholder="密码" />
+          </Form.Item>
+          <Form.Item name="remember" valuePropName="checked">
+            <Checkbox>记住我（30天免登录）</Checkbox>
           </Form.Item>
           <Form.Item>
             <Button type="primary" htmlType="submit" loading={loading} block>

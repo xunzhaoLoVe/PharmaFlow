@@ -1,9 +1,10 @@
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useMemo } from 'react';
 import { Table, Button, Space, Input, Modal, Form, Select, message, Popconfirm, Upload } from 'antd';
-import { PlusOutlined, UploadOutlined, DeleteOutlined } from '@ant-design/icons';
+import { PlusOutlined, UploadOutlined, DeleteOutlined, SearchOutlined } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
 import dayjs from 'dayjs';
 import * as XLSX from 'xlsx';
+import { useAuthStore } from '../../store/authStore';
 import apiClient from '../../api/client';
 import { getDrugDropdown } from '../../api/drugs';
 import { getCustomerDropdown } from '../../api/customers';
@@ -11,10 +12,13 @@ import { getDistribution, recordDownstream, deleteDistribution } from '../../api
 import type { DistributionRecordDto, DropdownItem } from '../../types';
 
 export default function PurchaseListPage() {
+  const canWrite = useAuthStore(s => s.canWrite);
   const [data, setData] = useState<DistributionRecordDto[]>([]);
   const [loading, setLoading] = useState(false);
   const [filteredCount, setFilteredCount] = useState(0);
   const [filteredData, setFilteredData] = useState<DistributionRecordDto[]>([]);
+  const [searchCustomer, setSearchCustomer] = useState('');
+  const [sqCustomer, setSqCustomer] = useState('');
   const [modalOpen, setModalOpen] = useState(false);
   const [drugs, setDrugs] = useState<DropdownItem[]>([]);
   const [customers, setCustomers] = useState<DropdownItem[]>([]);
@@ -38,6 +42,7 @@ export default function PurchaseListPage() {
   };
 
   useEffect(() => { load(); loadMeta(); }, []);
+  useEffect(() => { setFilteredCount(data.length); setFilteredData(data); }, [data]);
 
   const handleAdd = () => {
     form.resetFields();
@@ -69,11 +74,14 @@ export default function PurchaseListPage() {
 
   // Excel import
   const handleExcelImport = async (file: File) => {
+    message.loading('正在解析 Excel...', 0);
     const reader = new FileReader();
     reader.onload = async (e) => {
-      const wb = XLSX.read(e.target?.result, { type: 'array' });
-      const rows = XLSX.utils.sheet_to_json<Record<string, string>>(wb.Sheets[wb.SheetNames[0]], { defval: '' });
-      if (rows.length === 0) { message.warning('Excel 无数据'); return; }
+      try {
+        const wb = XLSX.read(e.target?.result, { type: 'array' });
+        const rows = XLSX.utils.sheet_to_json<Record<string, string>>(wb.Sheets[wb.SheetNames[0]], { defval: '' });
+        message.destroy();
+        if (rows.length === 0) { message.warning('Excel 无数据'); return; }
 
       const colMap: Record<string, string> = {};
       const headers = Object.keys(rows[0]);
@@ -120,13 +128,26 @@ export default function PurchaseListPage() {
           distributionDate: dateCol ? (row[dateCol] || '').trim() : dayjs().format('YYYY-MM-DD'),
         });
       }
-      if (dtos.length === 0) { message.warning(`无有效数据，跳过 ${skipped} 条`); return; }
-      await apiClient.post('/distribution/downstream/batch', dtos);
-      message.success(`导入完成: ${dtos.length} 条` + (skipped > 0 ? `, 跳过 ${skipped} 条` : '')); load();
+        if (dtos.length === 0) { message.warning(`无有效数据，跳过 ${skipped} 条`); return; }
+        await apiClient.post('/distribution/downstream/batch', dtos);
+        message.success(`导入完成: ${dtos.length} 条` + (skipped > 0 ? `, 跳过 ${skipped} 条` : '')); load();
+      } catch (ex: any) {
+        message.destroy();
+        message.error('Excel 解析失败: ' + (ex?.message || '未知错误'));
+      }
+    };
+    reader.onerror = () => {
+      message.destroy();
+      message.error('文件读取失败，请检查文件是否损坏');
     };
     reader.readAsArrayBuffer(file);
     return false;
   };
+
+  // 采购经销商搜索过滤（按钮触发）
+  const filtered = useMemo(() => {
+    return sqCustomer ? data.filter(d => (d.toCustomerName || '').includes(sqCustomer)) : data;
+  }, [data, sqCustomer]);
 
   const columns: ColumnsType<DistributionRecordDto> = [
     { title: '药品名称', dataIndex: 'drugName', width: 140,
@@ -158,17 +179,20 @@ export default function PurchaseListPage() {
     <div>
       <h2 style={{ marginBottom: 16 }}>📥 采购管理（本司出货至一级经销商）</h2>
       <Space wrap style={{ marginBottom: 16 }}>
-        <Button type="primary" icon={<PlusOutlined />} onClick={handleAdd}>录入出货</Button>
-        <Upload accept=".xlsx" showUploadList={false} beforeUpload={handleExcelImport}>
+        <Input placeholder="搜索采购经销商" value={searchCustomer} onChange={e => setSearchCustomer(e.target.value)}
+          onPressEnter={() => setSqCustomer(searchCustomer)} prefix={<SearchOutlined />} style={{ width: 200 }} allowClear />
+        <Button type="primary" icon={<SearchOutlined />} onClick={() => setSqCustomer(searchCustomer)}>搜索</Button>
+        {canWrite && <Button type="primary" icon={<PlusOutlined />} onClick={handleAdd}>录入出货</Button>}
+        {canWrite && <Upload accept=".xlsx" showUploadList={false} beforeUpload={handleExcelImport}>
           <Button icon={<UploadOutlined />}>导入Excel</Button>
-        </Upload>
-        <Button danger icon={<DeleteOutlined />} onClick={async () => {
+        </Upload>}
+        {canWrite && <Button danger icon={<DeleteOutlined />} onClick={async () => {
           if (window.confirm('确定清空所有记录？')) { await apiClient.delete('/distribution/clear?fromSelf=true'); message.success('已清空'); load(); }
-        }}>清空</Button>
+        }}>清空</Button>}
       </Space>
-      <Table rowKey="id" columns={columns} dataSource={data} loading={loading}
+      <Table rowKey="id" columns={columns} dataSource={filtered} loading={loading}
         onChange={(_p, _f, _s, extra) => { setFilteredCount(extra.currentDataSource.length); setFilteredData(extra.currentDataSource as DistributionRecordDto[]); }}
-        pagination={{ defaultPageSize: 10, showTotal: () => `共 ${data.length} 条`, showSizeChanger: true }} />
+        pagination={{ defaultPageSize: 10, showTotal: () => `共 ${filteredCount} 条`, showSizeChanger: true }} />
       <Modal title="录入出货（本司 → 一级经销商）" open={modalOpen} onOk={handleOk} onCancel={() => setModalOpen(false)} width={560}>
         <Form form={form} layout="vertical">
           <Form.Item name="drugId" label="药品名称" rules={[{ required: true }]}>

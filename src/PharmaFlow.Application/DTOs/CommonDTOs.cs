@@ -209,3 +209,44 @@ public record LoginResult
     public string? Role { get; set; }
     public List<string> Permissions { get; set; } = new();
 }
+
+public record EndCustomerSaleDto
+{
+    public string CustomerName { get; set; } = string.Empty;
+    public string? Province { get; set; }
+    public string DrugName { get; set; } = string.Empty;
+    public string? Specification { get; set; }
+    public decimal TotalQuantity { get; set; }
+}
+
+public record UserDto
+{
+    public Guid Id { get; set; }
+    public string Username { get; set; } = string.Empty;
+    public string DisplayName { get; set; } = string.Empty;
+    public string? Phone { get; set; }
+    public string? Email { get; set; }
+    public bool IsActive { get; set; }
+    public string? Role { get; set; }
+    public Guid? RoleId { get; set; }
+    public DateTime? LastLoginTime { get; set; }
+}
+
+public record CreateUserRequest
+{
+    public string Username { get; set; } = string.Empty;
+    public string Password { get; set; } = string.Empty;
+    public string DisplayName { get; set; } = string.Empty;
+    public string? Phone { get; set; }
+    public string? Email { get; set; }
+    public Guid? RoleId { get; set; }
+}
+
+public record UpdateUserRequest
+{
+    public string? DisplayName { get; set; }
+    public string? Phone { get; set; }
+    public string? Email { get; set; }
+    public Guid? RoleId { get; set; }
+    public bool? IsActive { get; set; }
+}

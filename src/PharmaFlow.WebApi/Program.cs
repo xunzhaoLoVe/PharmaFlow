@@ -95,26 +95,44 @@ app.Run();
 // ── 种子数据 ──
 static void EnsureEssentialData(AppDbContext db)
 {
-    if (!db.Users.Any())
+    // 按名称逐个检查，避免新增角色被跳过
+    void EnsureRole(string name, string desc, string[] perms)
     {
-        var adminRole = new PharmaFlow.Domain.Entities.Role
+        if (!db.Roles.Any(r => r.Name == name))
         {
-            Name = "管理员",
-            Description = "系统管理员",
-            Permissions = System.Text.Json.JsonSerializer.Serialize(new[] { "*" })
-        };
-        db.Roles.Add(adminRole);
-        var bytes = System.Security.Cryptography.SHA256.HashData(
-            System.Text.Encoding.UTF8.GetBytes("admin123"));
-        var hash = Convert.ToHexString(bytes).ToLower();
+            db.Roles.Add(new PharmaFlow.Domain.Entities.Role
+            {
+                Name = name,
+                Description = desc,
+                Permissions = System.Text.Json.JsonSerializer.Serialize(perms)
+            });
+        }
+    }
+    EnsureRole("管理员", "全部权限", new[] { "*" });
+    EnsureRole("操作员", "日常操作权限", new[] {
+        "dashboard", "drugs", "customers", "purchases", "sales",
+        "inventory", "distribution", "reports"
+    });
+    EnsureRole("只读用户", "仅查看权限", new[] {
+        "dashboard", "drugs", "customers", "purchases", "sales",
+        "inventory", "distribution", "reports"
+    });
+    db.SaveChanges();
+    if (!db.Users.Any(u => u.Username == "admin"))
+    {
+        var adminRole = db.Roles.First(r => r.Name == "管理员");
+        var adminSalt = AuthService.GenerateSalt();
+        var adminHash = AuthService.HashPassword("admin123", adminSalt);
         db.Users.Add(new PharmaFlow.Domain.Entities.User
         {
             Username = "admin",
-            PasswordHash = hash,
+            PasswordHash = adminHash,
+            PasswordSalt = adminSalt,
             DisplayName = "管理员",
             IsActive = true,
             Role = adminRole
         });
+        db.SaveChanges();
     }
     if (!db.Customers.Any(c => c.Code == "SELF"))
     {

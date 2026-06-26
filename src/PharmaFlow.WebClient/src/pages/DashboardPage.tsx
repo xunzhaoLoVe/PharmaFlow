@@ -31,7 +31,7 @@ function ChinaMapCard({ data, loading }: { data: { name: string; count: number }
 
   useEffect(() => {
     if (!data || loading || !ref.current) return;
-    fetch('https://geo.datav.aliyun.com/areas_v3/bound/100000_full.json')
+    fetch('/china-geo.json')
       .then(r => r.json())
       .then(geo => {
         if (!ref.current) return;
