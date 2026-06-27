@@ -1,6 +1,9 @@
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.EntityFrameworkCore;
 using PharmaFlow.Application.DTOs;
 using PharmaFlow.Application.Services;
+using PharmaFlow.Infrastructure.Data;
+using PharmaFlow.WebApi.Extensions;
 using PharmaFlow.WebApi.Models;
 
 namespace PharmaFlow.WebApi.Controllers;
@@ -201,5 +204,54 @@ public class DistributionController : ControllerBase
     {
         var items = await _distributionService.GetChannelConflictsAsync(batchNo);
         return Ok(ApiResponse<IReadOnlyList<ChannelConflictDto>>.Ok(items));
+    }
+
+    // ═══════════════════════════════════════════
+    // Review (审核)
+    // ═══════════════════════════════════════════
+
+    [HttpGet("review")]
+    public async Task<ActionResult<ApiResponse<PagedResult<DistributionReviewDto>>>> GetPendingReview(
+        [FromQuery] int page = 0, [FromQuery] int size = 20, [FromQuery] string? status = null)
+    {
+        var db = HttpContext.RequestServices.GetRequiredService<AppDbContext>();
+        var query = db.DistributionRecords.Include(d => d.Drug).Include(d => d.ToCustomer)
+            .Where(d => d.ReviewStatus != null);
+        if (!string.IsNullOrWhiteSpace(status))
+            query = query.Where(d => d.ReviewStatus == status);
+
+        var total = await query.CountAsync();
+        var items = await query.OrderByDescending(d => d.CreatedAt).Skip(page * size).Take(size).ToListAsync();
+        var dtos = items.Select(d => new DistributionReviewDto
+        {
+            Id = d.Id, DrugName = d.Drug?.Name ?? "", BatchNo = d.BatchNo,
+            ToCustomerName = d.ToCustomer?.Name, Quantity = d.Quantity,
+            TaxedUnitPrice = d.TaxedUnitPrice, DistributionDate = d.DistributionDate,
+            Province = d.Province, ReviewStatus = d.ReviewStatus, RejectReason = d.RejectReason,
+        }).ToList();
+        return Ok(ApiResponse<PagedResult<DistributionReviewDto>>.Ok(new PagedResult<DistributionReviewDto>
+        { Items = dtos, TotalCount = total, PageIndex = page, PageSize = size }));
+    }
+
+    [HttpPost("review/approve")]
+    public async Task<ActionResult<ApiResponse>> ApproveReview([FromBody] ReviewRequest request)
+    {
+        var db = HttpContext.RequestServices.GetRequiredService<AppDbContext>();
+        var reviewerId = User.GetUserId();
+        var records = await db.DistributionRecords.Where(d => request.RecordIds.Contains(d.Id) && d.ReviewStatus == "待审核").ToListAsync();
+        foreach (var r in records) { r.ReviewStatus = "已通过"; r.ReviewerId = reviewerId; r.ReviewedAt = DateTime.UtcNow; r.UpdatedAt = DateTime.UtcNow; }
+        await db.SaveChangesAsync();
+        return Ok(ApiResponse.Ok($"已通过 {records.Count} 条"));
+    }
+
+    [HttpPost("review/reject")]
+    public async Task<ActionResult<ApiResponse>> RejectReview([FromBody] RejectRequest request)
+    {
+        var db = HttpContext.RequestServices.GetRequiredService<AppDbContext>();
+        var reviewerId = User.GetUserId();
+        var records = await db.DistributionRecords.Where(d => request.RecordIds.Contains(d.Id) && d.ReviewStatus == "待审核").ToListAsync();
+        foreach (var r in records) { r.ReviewStatus = "已驳回"; r.ReviewerId = reviewerId; r.ReviewedAt = DateTime.UtcNow; r.RejectReason = request.Reason; r.UpdatedAt = DateTime.UtcNow; }
+        await db.SaveChangesAsync();
+        return Ok(ApiResponse.Ok($"已驳回 {records.Count} 条"));
     }
 }

@@ -22,6 +22,11 @@ public class AppDbContext : DbContext
     public DbSet<User> Users => Set<User>();
     public DbSet<Role> Roles => Set<Role>();
     public DbSet<SystemConfig> SystemConfigs => Set<SystemConfig>();
+    public DbSet<CollectionSource> CollectionSources => Set<CollectionSource>();
+    public DbSet<CollectionTask> CollectionTasks => Set<CollectionTask>();
+    public DbSet<CollectionRecord> CollectionRecords => Set<CollectionRecord>();
+    public DbSet<ImportRule> ImportRules => Set<ImportRule>();
+    public DbSet<ModuleRuleConfig> ModuleRuleConfigs => Set<ModuleRuleConfig>();
 
     protected override void ConfigureConventions(ModelConfigurationBuilder configurationBuilder)
     {

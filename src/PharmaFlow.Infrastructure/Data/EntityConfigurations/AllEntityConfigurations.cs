@@ -173,6 +173,9 @@ public class DistributionRecordConfiguration : IEntityTypeConfiguration<Distribu
         builder.HasOne(e => e.FromCustomer).WithMany().HasForeignKey(e => e.FromCustomerId).OnDelete(DeleteBehavior.SetNull);
         builder.HasOne(e => e.ToCustomer).WithMany().HasForeignKey(e => e.ToCustomerId).OnDelete(DeleteBehavior.SetNull);
         builder.HasOne(e => e.SalesOrder).WithMany().HasForeignKey(e => e.SalesOrderId).OnDelete(DeleteBehavior.SetNull);
+        builder.Property(e => e.ReviewStatus).HasMaxLength(20);
+        builder.Property(e => e.RejectReason).HasMaxLength(500);
+        builder.HasOne(e => e.Reviewer).WithMany().HasForeignKey(e => e.ReviewerId).OnDelete(DeleteBehavior.SetNull);
     }
 }
 
@@ -216,5 +219,82 @@ public class SystemConfigConfiguration : IEntityTypeConfiguration<SystemConfig>
         builder.Property(e => e.Value).HasMaxLength(500).IsRequired();
         builder.Property(e => e.Description).HasMaxLength(200);
         builder.Property(e => e.Group).HasMaxLength(50);
+    }
+}
+
+public class CollectionSourceConfiguration : IEntityTypeConfiguration<CollectionSource>
+{
+    public void Configure(EntityTypeBuilder<CollectionSource> builder)
+    {
+        builder.ToTable("CollectionSources");
+        builder.HasKey(e => e.Id);
+        builder.Property(e => e.Name).HasMaxLength(200).IsRequired();
+        builder.Property(e => e.BaseUrl).HasMaxLength(500).IsRequired();
+        builder.Property(e => e.AuthConfig).HasColumnType("text");
+        builder.Property(e => e.ExportConfig).HasColumnType("text");
+        builder.Property(e => e.TransformConfig).HasColumnType("text");
+        builder.Property(e => e.ScheduleCron).HasMaxLength(100);
+        builder.Property(e => e.LastCollectionStatus).HasMaxLength(50);
+        builder.HasOne(e => e.Rule).WithMany().HasForeignKey(e => e.RuleId).OnDelete(DeleteBehavior.SetNull);
+        builder.HasQueryFilter(e => !e.IsDeleted);
+    }
+}
+
+public class CollectionTaskConfiguration : IEntityTypeConfiguration<CollectionTask>
+{
+    public void Configure(EntityTypeBuilder<CollectionTask> builder)
+    {
+        builder.ToTable("CollectionTasks");
+        builder.HasKey(e => e.Id);
+        builder.Property(e => e.ErrorMessage).HasMaxLength(2000);
+        builder.HasOne(e => e.Source).WithMany(e => e.Tasks)
+            .HasForeignKey(e => e.SourceId).OnDelete(DeleteBehavior.Cascade);
+    }
+}
+
+public class ImportRuleConfiguration : IEntityTypeConfiguration<ImportRule>
+{
+    public void Configure(EntityTypeBuilder<ImportRule> builder)
+    {
+        builder.ToTable("ImportRules");
+        builder.HasKey(e => e.Id);
+        builder.Property(e => e.Name).HasMaxLength(200).IsRequired();
+        builder.Property(e => e.Description).HasMaxLength(500);
+        builder.HasMany(e => e.ModuleConfigs).WithOne(e => e.Rule)
+            .HasForeignKey(e => e.RuleId).OnDelete(DeleteBehavior.Cascade);
+        builder.HasQueryFilter(e => !e.IsDeleted);
+    }
+}
+
+public class ModuleRuleConfigConfiguration : IEntityTypeConfiguration<ModuleRuleConfig>
+{
+    public void Configure(EntityTypeBuilder<ModuleRuleConfig> builder)
+    {
+        builder.ToTable("ModuleRuleConfigs");
+        builder.HasKey(e => e.Id);
+        builder.Property(e => e.ModuleName).HasMaxLength(100).IsRequired();
+        builder.Property(e => e.FieldMappings).HasColumnType("text").IsRequired();
+        builder.Property(e => e.NormalizeRules).HasColumnType("text");
+        builder.Property(e => e.MatchConfig).HasColumnType("text");
+    }
+}
+
+public class CollectionRecordConfiguration : IEntityTypeConfiguration<CollectionRecord>
+{
+    public void Configure(EntityTypeBuilder<CollectionRecord> builder)
+    {
+        builder.ToTable("CollectionRecords");
+        builder.HasKey(e => e.Id);
+        builder.Property(e => e.RawDataJson).HasColumnType("text").IsRequired();
+        builder.Property(e => e.CleanedDataJson).HasColumnType("text");
+        builder.Property(e => e.TargetEntityType).HasMaxLength(100);
+        builder.Property(e => e.RejectReason).HasMaxLength(500);
+        builder.Property(e => e.ErrorMessage).HasMaxLength(2000);
+        builder.HasOne(e => e.Task).WithMany(e => e.Records)
+            .HasForeignKey(e => e.TaskId).OnDelete(DeleteBehavior.Cascade);
+        builder.HasOne(e => e.Source).WithMany(e => e.Records)
+            .HasForeignKey(e => e.SourceId).OnDelete(DeleteBehavior.Restrict);
+        builder.HasOne(e => e.Reviewer).WithMany()
+            .HasForeignKey(e => e.ReviewerId).OnDelete(DeleteBehavior.SetNull);
     }
 }

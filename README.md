@@ -15,6 +15,7 @@
 | 状态管理 | Zustand |
 | 图表 | ECharts / Recharts |
 | Excel | xlsx / ExcelJS |
+| 数据采集 | HtmlAgilityPack / Cronos |
 | 认证 | JWT (HMAC-SHA256) |
 | 部署 | Docker + Docker Compose + Nginx |
 
@@ -26,7 +27,7 @@ PharmaFlow/
 │   ├── PharmaFlow.Domain/          # 领域实体与枚举
 │   ├── PharmaFlow.Application/     # 应用服务层与 DTO
 │   ├── PharmaFlow.Infrastructure/  # 数据访问与 EF Core
-│   ├── PharmaFlow.WebApi/          # ASP.NET Core Web API
+│   ├── PharmaFlow.WebApi/          # ASP.NET Core Web API + HostedServices
 │   └── PharmaFlow.WebClient/       # React 前端
 ├── Dockerfile.backend              # 后端 Docker 镜像
 ├── Dockerfile.frontend             # 前端 Nginx Docker 镜像
@@ -92,8 +93,8 @@ chmod +x deploy.sh
 | 角色 | 权限范围 | 说明 |
 |------|---------|------|
 | 管理员 | `*` 全部 | 可管理用户、分配角色 |
-| 操作员 | 8 模块 | 全部读写权限 |
-| 只读用户 | 8 模块 | 仅查看，无操作按钮 |
+| 操作员 | 9 模块 | 全部读写权限 |
+| 只读用户 | 9 模块 | 仅查看，无操作按钮 |
 
 密码安全：SHA256 加盐哈希 + 5 次错误锁定 15 分钟 + 记住我功能。
 
@@ -109,6 +110,7 @@ chmod +x deploy.sh
 - **串货预警** — 渠道冲突检测
 - **报表统计** — 终端客户销售明细 + 日期/药品/规格筛选
 - **用户管理** — 用户 CRUD + 角色分配
+- **数据采集** — 外部平台数据采集（HTTP + HTML 解析 + 字段清洗 + 定时调度 + 审核入库）
 
 ## ⚠️ 注意事项
 

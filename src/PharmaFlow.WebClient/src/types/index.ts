@@ -237,3 +237,53 @@ export interface ApiResponse<T> {
   message?: string;
   data?: T;
 }
+
+// ── 数据采集 ──
+export interface CollectionSourceDto {
+  id: string;
+  name: string;
+  platformType: string;
+  baseUrl: string;
+  authType: string;
+  authConfig: string;
+  exportConfig: string;
+  transformConfig: string;
+  isEnabled: boolean;
+  scheduleCron?: string;
+  ruleId?: string;
+  ruleName?: string;
+  lastCollectionAt?: string;
+  lastCollectionStatus?: string;
+}
+
+export interface CollectionTaskDto {
+  id: string;
+  sourceId: string;
+  sourceName: string;
+  triggerType: string;
+  status: string;
+  startedAt?: string;
+  completedAt?: string;
+  totalRecords: number;
+  successCount: number;
+  errorCount: number;
+  skippedCount: number;
+  isSubmitted: boolean;
+  errorMessage?: string;
+}
+
+export interface CollectionRecordDto {
+  id: string;
+  taskId: string;
+  sourceId: string;
+  sourceName: string;
+  status: string;
+  rawDataJson: string;
+  cleanedDataJson?: string;
+  targetEntityType?: string;
+  targetEntityId?: string;
+  reviewerName?: string;
+  reviewedAt?: string;
+  rejectReason?: string;
+  errorMessage?: string;
+}

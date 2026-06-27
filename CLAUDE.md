@@ -2,7 +2,7 @@
 
 ## 项目概述
 
-ASP.NET Core 8.0 + React 19 + PostgreSQL 的药品流向追踪管理平台，含 10 个功能模块。
+ASP.NET Core 8.0 + React 19 + PostgreSQL 的药品流向追踪管理平台，含 11 个功能模块（含数据采集）。
 
 ## 关键文件位置
 
@@ -19,6 +19,9 @@ ASP.NET Core 8.0 + React 19 + PostgreSQL 的药品流向追踪管理平台，含
 | `src/PharmaFlow.WebClient/src/components/AppLayout.tsx` | 侧边栏菜单 + 权限过滤 |
 | `src/PharmaFlow.WebClient/src/store/authStore.ts` | 认证状态 + canWrite 权限 |
 | `src/PharmaFlow.WebClient/src/pages/` | 页面组件 |
+| `src/PharmaFlow.WebApi/HostedServices/` | 后台定时服务（采集调度等） |
+| `src/PharmaFlow.Application/Services/CollectionExecutionService.cs` | 数据采集 HTTP 执行引擎 |
+| `src/PharmaFlow.Application/Services/DataCleaner.cs` | 采集数据清洗器 |
 | `docker-compose.yml` | Docker 编排（PostgreSQL + Backend + Nginx） |
 | `nginx.conf` | Nginx 反向代理配置 |
 
@@ -153,9 +156,10 @@ c.close()
 3. **SSH 连接频率限制**: 短时间多次 SSH 会被服务器拒绝，每次连接间隔 ≥ 3 秒
 4. **docker compose down -v** 会删除数据库卷，谨慎使用
 5. **密码**: admin 账号密码为 `admin123`，服务器 ROOT 密码 `123123123qwe.`
-6. **权限体系**: 管理员 `*` | 操作员 8 模块 | 只读用户 8 模块（无写权限）
+6. **权限体系**: 管理员 `*` | 操作员 9 模块 | 只读用户 9 模块（无写权限）
    - 前端通过 `canWrite` 控制按钮显隐
    - 菜单通过 `filterMenu(permissions)` 过滤
+   - 权限 key: `dashboard`, `drugs`, `customers`, `purchases`, `sales`, `inventory`, `distribution`, `reports`, `datacollection`, `users`
 
 ## 常用代码模式
 
@@ -183,3 +187,28 @@ import apiClient from '../../api/client';
 const res = await apiClient.get<ApiResponse<XxxDto[]>>('/xxx');
 const data = (res as any).data || [];
 ```
+
+### 数据采集
+
+**采集源配置 JSON 结构**：
+
+```json
+// AuthConfig — 认证配置
+{ "loginPath": "/login", "username": "user", "password": "pass", "extraFields": {} }
+
+// ExportConfig — 导出配置
+{ "exportPath": "/export", "method": "GET", "dataFormat": "html",
+  "tableSelector": "table.data-table", "rowSelector": "tbody tr", "queryParams": {} }
+
+// TransformConfig — 字段映射配置
+{ "targetEntity": "DistributionRecord",
+  "fieldMappings": { "DrugName": {"source":"药品名称"}, "Quantity":{"source":"数量","type":"decimal"} },
+  "valueMappings": { "Province": {"沪":"上海市","京":"北京市"} },
+  "defaults": { "Status": "待审核" } }
+```
+
+**采集管道**：登录外部平台 → HTTP 导出 → HTML/JSON 解析 → DataCleaner 字段清洗 → CollectionRecord(待审核) → 人工审核 → 导入主数据表
+
+**定时调度**: `CollectionSchedulerHostedService` (BackgroundService) 每 60 秒轮询 `ScheduleCron` 表达式
+
+**新增采集平台**: 只需在页面上配置 AuthConfig / ExportConfig / TransformConfig JSON，无需编写代码

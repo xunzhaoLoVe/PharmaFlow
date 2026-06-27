@@ -1,6 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 using PharmaFlow.Application.Services;
 using PharmaFlow.Infrastructure.Data;
+using PharmaFlow.WebApi.HostedServices;
 using PharmaFlow.WebApi.Middleware;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -19,6 +20,14 @@ builder.Services.AddDbContext<AppDbContext>(options =>
         options.UseSqlite(connStr);
 });
 
+// ── HttpClient ──
+builder.Services.AddHttpClient("CollectionClient", client =>
+{
+    client.DefaultRequestHeaders.Add("User-Agent",
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36");
+    client.Timeout = TimeSpan.FromSeconds(60);
+});
+
 // ── Services ──
 builder.Services.AddScoped<IAuthService, AuthService>();
 builder.Services.AddScoped<IDrugService, DrugService>();
@@ -30,7 +39,17 @@ builder.Services.AddScoped<IDashboardService, DashboardService>();
 builder.Services.AddScoped<IReportService, ReportService>();
 builder.Services.AddScoped<IPurchaseService, PurchaseService>();
 builder.Services.AddScoped<ISalesService, SalesService>();
+builder.Services.AddScoped<ICollectionService, CollectionService>();
+builder.Services.AddScoped<DataCleaner>();
+builder.Services.AddScoped<SmartDataCleaner>();
+builder.Services.AddScoped<SpecNormalizer>();
+builder.Services.AddScoped<IImportRuleService, ImportRuleService>();
+builder.Services.AddScoped<BatchProcessor>();
+builder.Services.AddScoped<CollectionExecutionService>();
 builder.Services.AddScoped<AppConfigService>();
+
+// ── Background Services ──
+builder.Services.AddHostedService<CollectionSchedulerHostedService>();
 
 // ── MVC + Swagger + CORS ──
 builder.Services.AddControllers();
@@ -111,11 +130,11 @@ static void EnsureEssentialData(AppDbContext db)
     EnsureRole("管理员", "全部权限", new[] { "*" });
     EnsureRole("操作员", "日常操作权限", new[] {
         "dashboard", "drugs", "customers", "purchases", "sales",
-        "inventory", "distribution", "reports"
+        "inventory", "distribution", "reports", "datacollection"
     });
     EnsureRole("只读用户", "仅查看权限", new[] {
         "dashboard", "drugs", "customers", "purchases", "sales",
-        "inventory", "distribution", "reports"
+        "inventory", "distribution", "reports", "datacollection"
     });
     db.SaveChanges();
     if (!db.Users.Any(u => u.Username == "admin"))

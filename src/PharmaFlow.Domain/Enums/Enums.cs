@@ -46,3 +46,47 @@ public enum DistributorLevel
     二级经销商 = 2,
     三级经销商 = 3,
 }
+
+/// <summary>采集平台类型</summary>
+public enum CollectionPlatformType
+{
+    流向平台 = 0,
+    ERP系统 = 1,
+    其他 = 2,
+}
+
+/// <summary>采集认证方式</summary>
+public enum CollectionAuthType
+{
+    Cookie = 0,
+    Token = 1,
+    BasicAuth = 2,
+}
+
+/// <summary>采集任务状态</summary>
+public enum CollectionTaskStatus
+{
+    待执行 = 0,
+    执行中 = 1,
+    已完成 = 2,
+    失败 = 3,
+}
+
+/// <summary>采集记录状态</summary>
+public enum CollectionRecordStatus
+{
+    原始 = 0,
+    清洗中 = 1,
+    待审核 = 2,
+    已通过 = 3,
+    已驳回 = 4,
+    已导入 = 5,
+    错误 = 6,
+}
+
+/// <summary>触发方式</summary>
+public enum TriggerType
+{
+    手动 = 0,
+    定时 = 1,
+}

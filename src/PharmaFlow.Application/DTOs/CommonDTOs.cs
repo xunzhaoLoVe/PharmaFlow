@@ -250,3 +250,148 @@ public record UpdateUserRequest
     public Guid? RoleId { get; set; }
     public bool? IsActive { get; set; }
 }
+
+public record CollectionSourceDto
+{
+    public Guid Id { get; set; }
+    public string Name { get; set; } = string.Empty;
+    public string PlatformType { get; set; } = string.Empty;
+    public string BaseUrl { get; set; } = string.Empty;
+    public string AuthType { get; set; } = string.Empty;
+    public string AuthConfig { get; set; } = "{}";
+    public string ExportConfig { get; set; } = "{}";
+    public string TransformConfig { get; set; } = "{}";
+    public bool IsEnabled { get; set; }
+    public string? ScheduleCron { get; set; }
+    public DateTime? LastCollectionAt { get; set; }
+    public string? LastCollectionStatus { get; set; }
+    public Guid? RuleId { get; set; }
+    public string? RuleName { get; set; }
+}
+
+public record CollectionTaskDto
+{
+    public Guid Id { get; set; }
+    public Guid SourceId { get; set; }
+    public string SourceName { get; set; } = string.Empty;
+    public string TriggerType { get; set; } = string.Empty;
+    public string Status { get; set; } = string.Empty;
+    public DateTime? StartedAt { get; set; }
+    public DateTime? CompletedAt { get; set; }
+    public int TotalRecords { get; set; }
+    public int SuccessCount { get; set; }
+    public int ErrorCount { get; set; }
+    public int SkippedCount { get; set; }
+    public bool IsSubmitted { get; set; }
+    public string? ErrorMessage { get; set; }
+}
+
+public record CollectionRecordDto
+{
+    public Guid Id { get; set; }
+    public Guid TaskId { get; set; }
+    public Guid SourceId { get; set; }
+    public string SourceName { get; set; } = string.Empty;
+    public string Status { get; set; } = string.Empty;
+    public string RawDataJson { get; set; } = "{}";
+    public string? CleanedDataJson { get; set; }
+    public string? TargetEntityType { get; set; }
+    public Guid? TargetEntityId { get; set; }
+    public string? ReviewerName { get; set; }
+    public DateTime? ReviewedAt { get; set; }
+    public string? RejectReason { get; set; }
+    public string? ErrorMessage { get; set; }
+}
+
+public record ReviewRequest
+{
+    public List<Guid> RecordIds { get; set; } = new();
+}
+
+public record RejectRequest
+{
+    public List<Guid> RecordIds { get; set; } = new();
+    public string Reason { get; set; } = string.Empty;
+}
+
+public record ManualTriggerRequest
+{
+    public Guid SourceId { get; set; }
+}
+
+// ── 批次处理 ──
+
+public record BatchPreviewDto
+{
+    public Guid TaskId { get; set; }
+    public int TotalRecords { get; set; }
+    public List<DrugMatchItem> Drugs { get; set; } = new();
+    public List<CustomerMatchItem> Customers { get; set; } = new();
+}
+
+public record DrugMatchItem
+{
+    public string Name { get; set; } = "";
+    public string? OriginalSpec { get; set; }
+    public string? NormalizedSpec { get; set; }
+    public string? Manufacturer { get; set; }
+    public string? Code { get; set; }
+    public bool Matched { get; set; }
+    public Guid? ExistingId { get; set; }
+    public string? ExistingName { get; set; }
+    public string? ExistingSpec { get; set; }
+}
+
+public record CustomerMatchItem
+{
+    public string Name { get; set; } = "";
+    public string? Code { get; set; }
+    public string? Province { get; set; }
+    public bool Matched { get; set; }
+    public Guid? ExistingId { get; set; }
+    public string? ExistingName { get; set; }
+}
+
+public record BatchImportResult
+{
+    public int CreatedDrugs { get; set; }
+    public int CreatedCustomers { get; set; }
+    public int Imported { get; set; }
+    public int Skipped { get; set; }
+}
+
+public record DistributionReviewDto
+{
+    public Guid Id { get; set; }
+    public string DrugName { get; set; } = "";
+    public string? BatchNo { get; set; }
+    public string? ToCustomerName { get; set; }
+    public decimal Quantity { get; set; }
+    public decimal TaxedUnitPrice { get; set; }
+    public DateTime DistributionDate { get; set; }
+    public string? Province { get; set; }
+    public string? ReviewStatus { get; set; }
+    public string? RejectReason { get; set; }
+    public Guid? TaskId { get; set; }
+}
+
+// ── 导入规则 ──
+
+public record ImportRuleDto
+{
+    public Guid Id { get; set; }
+    public string Name { get; set; } = "";
+    public string? Description { get; set; }
+    public List<ModuleRuleConfigDto> ModuleConfigs { get; set; } = new();
+}
+
+public record ModuleRuleConfigDto
+{
+    public Guid Id { get; set; }
+    public Guid RuleId { get; set; }
+    public string ModuleName { get; set; } = "";
+    public string FieldMappings { get; set; } = "{}";
+    public string? NormalizeRules { get; set; }
+    public string? MatchConfig { get; set; }
+    public bool AutoCreate { get; set; }
+}

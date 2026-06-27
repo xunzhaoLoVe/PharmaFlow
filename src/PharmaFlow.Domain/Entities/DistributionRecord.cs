@@ -29,4 +29,11 @@ public class DistributionRecord : BaseEntity
     public string? Operator { get; set; }
     public string? Province { get; set; }
     public string? DistributionDateDisplay { get; set; }
+
+    /// <summary>审核状态: 待审核/已通过/已驳回</summary>
+    public string? ReviewStatus { get; set; }
+    public Guid? ReviewerId { get; set; }
+    public User? Reviewer { get; set; }
+    public DateTime? ReviewedAt { get; set; }
+    public string? RejectReason { get; set; }
 }
