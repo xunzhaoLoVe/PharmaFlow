@@ -20,9 +20,17 @@ ASP.NET Core 8.0 + React 19 + PostgreSQL 的药品流向追踪管理平台，含
 | `src/PharmaFlow.WebClient/src/store/authStore.ts` | 认证状态 + canWrite 权限 |
 | `src/PharmaFlow.WebClient/src/pages/` | 页面组件 |
 | `src/PharmaFlow.WebApi/HostedServices/` | 后台定时服务（采集调度等） |
+| `src/PharmaFlow.WebApi/HostedServices/CollectionSchedulerHostedService.cs` | 定时采集调度服务 |
 | `src/PharmaFlow.Application/Services/CollectionExecutionService.cs` | 数据采集 HTTP 执行引擎 |
-| `src/PharmaFlow.Application/Services/DataCleaner.cs` | 采集数据清洗器 |
-| `docker-compose.yml` | Docker 编排（PostgreSQL + Backend + Nginx） |
+| `src/PharmaFlow.Application/Services/CollectionService.cs` | 采集服务 + 去重 + 提交 |
+| `src/PharmaFlow.Application/Services/DataCleaner.cs` | 基础数据清洗器（字段映射） |
+| `src/PharmaFlow.Application/Services/SmartDataCleaner.cs` | 智能清洗器（校验+匹配+异常检测） |
+| `src/PharmaFlow.Application/Services/BatchProcessor.cs` | 批次处理器（提取+匹配+导入） |
+| `src/PharmaFlow.Application/Services/SpecNormalizer.cs` | 规格规范化引擎 |
+| `src/PharmaFlow.Application/Services/ImportRuleService.cs` | 导入规则服务 |
+| `src/PharmaFlow.WebClient/src/pages/datacollection/` | 数据采集前端页面 |
+
+... (remaining lines unchanged) 
 | `nginx.conf` | Nginx 反向代理配置 |
 
 ## 开发工作流
@@ -190,25 +198,41 @@ const data = (res as any).data || [];
 
 ### 数据采集
 
+**三个 Tab 页面**：
+- **采集源配置**：管理采集源（认证+导出 JSON 配置），支持 Cookie/Token/表单登录，JSON/HTML/Excel 解析
+- **采集数据管理**：合并视图按源分组，查看数据、配置映射、提交到汇总
+- **采集汇总**：统一固定列表格，按源筛选，支持清空
+
 **采集源配置 JSON 结构**：
 
 ```json
-// AuthConfig — 认证配置
-{ "loginPath": "/login", "username": "user", "password": "pass", "extraFields": {} }
+// AuthConfig — 认证配置（支持 Cookie Token / Header Token / 表单登录）
+{ "token": { "cookie_name": "FLOW_TOKEN", "value": "eyJ..." },
+  "headers": { "Origin": "...", "Referer": "..." } }
 
-// ExportConfig — 导出配置
-{ "exportPath": "/export", "method": "GET", "dataFormat": "html",
-  "tableSelector": "table.data-table", "rowSelector": "tbody tr", "queryParams": {} }
+// ExportConfig — 导出配置（JSON POST / Form POST / GET，JSON/HTML/Excel 解析）
+{ "export": { "url": "...", "method": "POST", "content_type": "application/json", "dataFormat": "json" },
+  "body_template": { "db": "db", "params": { "startDate": "{{dayBeforeYesterday}}", "endDate": "{{yesterday}}" } } }
 
-// TransformConfig — 字段映射配置
+// TransformConfig — 字段映射+清洗（在「配置映射」中可视化配置）
 { "targetEntity": "DistributionRecord",
-  "fieldMappings": { "DrugName": {"source":"药品名称"}, "Quantity":{"source":"数量","type":"decimal"} },
-  "valueMappings": { "Province": {"沪":"上海市","京":"北京市"} },
-  "defaults": { "Status": "待审核" } }
+  "fieldMappings": { "DrugName": {"source":"FPRODUCTNAME"}, ... },
+  "validation": { "requiredFields": [...], "fieldRules": {...} },
+  "masterDataMatch": { "drug": {...}, "customer": {...} },
+  "smartCleaning": { "normalizeText": true, "deduplicate": {...}, "anomalyDetection": {...} } }
 ```
 
-**采集管道**：登录外部平台 → HTTP 导出 → HTML/JSON 解析 → DataCleaner 字段清洗 → CollectionRecord(待审核) → 人工审核 → 导入主数据表
+**日期变量**（采集时自动替换）：
+| 变量 | 含义 |
+|------|------|
+| `{{startDate}}` | 30天前 |
+| `{{endDate}}` | 昨天 |
+| `{{today}}` | 今天 |
+| `{{yesterday}}` | 昨天 |
+| `{{dayBeforeYesterday}}` | 前天 |
 
-**定时调度**: `CollectionSchedulerHostedService` (BackgroundService) 每 60 秒轮询 `ScheduleCron` 表达式
+**采集管道**：定时/手动触发 → HTTP 登录 → 分页导出 → JSON/HTML/Excel 解析 → SmartDataCleaner 三阶段清洗 → CollectionRecord → 去重存储 → 配置映射 → 提交汇总
 
-**新增采集平台**: 只需在页面上配置 AuthConfig / ExportConfig / TransformConfig JSON，无需编写代码
+**定时调度**: `CollectionSchedulerHostedService` (BackgroundService) 每 60 秒轮询 `ScheduleCron` 表达式（如 `0 8 * * *` 每天8点）
+
+**新增采集平台**: 编辑采集源 → 配置 AuthConfig + ExportConfig JSON → 保存 → 采集 → 配置映射 → 提交
