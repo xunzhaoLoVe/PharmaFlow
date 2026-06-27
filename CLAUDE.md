@@ -213,6 +213,7 @@ const data = (res as any).data || [];
 // ExportConfig — 导出配置（JSON POST / Form POST / GET，JSON/HTML/Excel 解析）
 { "export": { "url": "...", "method": "POST", "content_type": "application/json", "dataFormat": "json" },
   "body_template": { "db": "db", "params": { "startDate": "{{dayBeforeYesterday}}", "endDate": "{{yesterday}}" } } }
+// 注：body_template 在外层，不在 export 内层；Form POST 用 params 在 export 内
 
 // TransformConfig — 字段映射+清洗（在「配置映射」中可视化配置）
 { "targetEntity": "DistributionRecord",
@@ -236,3 +237,11 @@ const data = (res as any).data || [];
 **定时调度**: `CollectionSchedulerHostedService` (BackgroundService) 每 60 秒轮询 `ScheduleCron` 表达式（如 `0 8 * * *` 每天8点）
 
 **新增采集平台**: 编辑采集源 → 配置 AuthConfig + ExportConfig JSON → 保存 → 采集 → 配置映射 → 提交
+
+**常见问题排查**：
+- 采集为0条：检查后端日志 `cat tasks/*.output | grep "导出"` 查看API响应
+- 502错误：后端未启动，`dotnet run` 重启
+- body_template变量不生效：确保放在外层（与export同级），不要放在export内部
+- Form POST参数缺失：params需放在export节点内部
+- 日期变量不替换：确认变量名拼写正确，`{{dayBeforeYesterday}}` 带完整驼峰
+- Token过期：从浏览器F12→Application→Cookies复制新Token
