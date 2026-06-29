@@ -71,6 +71,7 @@ public class CollectionService : ICollectionService
             IsEnabled = dto.IsEnabled,
             ScheduleCron = dto.ScheduleCron,
             RuleId = dto.RuleId,
+            AutoSubmit = dto.AutoSubmit,
         };
         _db.CollectionSources.Add(source);
         try
@@ -101,6 +102,7 @@ public class CollectionService : ICollectionService
         source.IsEnabled = dto.IsEnabled;
         source.ScheduleCron = dto.ScheduleCron;
         source.RuleId = dto.RuleId;
+        source.AutoSubmit = dto.AutoSubmit;
         source.UpdatedAt = DateTime.UtcNow;
         await _db.SaveChangesAsync();
     }
@@ -221,12 +223,17 @@ public class CollectionService : ICollectionService
             task.SkippedCount = skipped;
             source.LastCollectionAt = DateTime.UtcNow;
             source.LastCollectionStatus = skipped > 0 ? $"成功(跳过{skipped}条重复)" : "成功";
+
+            // 自动提交
+            if (source.AutoSubmit) task.IsSubmitted = true;
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "采集执行失败, SourceId={SourceId}", sourceId);
             task.Status = CollectionTaskStatus.失败; task.CompletedAt = DateTime.UtcNow; task.ErrorMessage = ex.Message;
-            source.LastCollectionAt = DateTime.UtcNow; source.LastCollectionStatus = "失败";
+            source.LastCollectionAt = DateTime.UtcNow;
+            source.LastCollectionStatus = ex.Message.Contains("401") || ex.Message.Contains("Unauthorized") || ex.Message.Contains("未授权") || ex.Message.Contains("tokenVersion expire")
+                ? "Token已过期" : "失败";
         }
 
         await _db.SaveChangesAsync();
@@ -417,6 +424,7 @@ public class CollectionService : ICollectionService
         ScheduleCron = s.ScheduleCron,
         RuleId = s.RuleId,
         RuleName = s.Rule?.Name,
+        AutoSubmit = s.AutoSubmit,
         LastCollectionAt = s.LastCollectionAt,
         LastCollectionStatus = s.LastCollectionStatus,
     };

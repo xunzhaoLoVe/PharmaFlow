@@ -51,6 +51,14 @@ export async function clearSummary(): Promise<void> {
   await apiClient.post('/collection/summary/clear');
 }
 
+export async function updateToken(sourceId: string, token: string, cookieName?: string): Promise<void> {
+  await apiClient.put(`/collection/sources/${sourceId}/token`, { token, cookieName });
+}
+
+export async function setAutoSubmit(sourceId: string, autoSubmit: boolean): Promise<void> {
+  await apiClient.post(`/collection/sources/${sourceId}/autosubmit`, { autoSubmit });
+}
+
 export async function triggerCollection(sourceId: string): Promise<CollectionTaskDto> {
   return getData(await apiClient.post<ApiResponse<CollectionTaskDto>>('/collection/trigger', { sourceId }));
 }

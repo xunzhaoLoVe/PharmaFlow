@@ -3,7 +3,7 @@ import type { ApiResponse } from '../types';
 
 const apiClient = axios.create({
   baseURL: '/api',
-  timeout: 15000,
+  timeout: 120000,
 });
 
 // 请求拦截器：附加 JWT Token

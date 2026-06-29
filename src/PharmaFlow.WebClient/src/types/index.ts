@@ -252,6 +252,7 @@ export interface CollectionSourceDto {
   scheduleCron?: string;
   ruleId?: string;
   ruleName?: string;
+  autoSubmit: boolean;
   lastCollectionAt?: string;
   lastCollectionStatus?: string;
 }

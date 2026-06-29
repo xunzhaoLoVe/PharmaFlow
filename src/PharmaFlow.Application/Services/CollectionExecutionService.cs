@@ -34,8 +34,6 @@ public class CollectionExecutionService
     {
         var results = new List<CollectionRowResult>();
 
-        using var httpClient = new HttpClient();
-
         // 解析认证配置
         AuthConfig? authConfig = null;
         try { authConfig = JsonSerializer.Deserialize<AuthConfig>(authConfigJson,
@@ -43,21 +41,63 @@ public class CollectionExecutionService
             _logger.LogWarning(ex, "AuthConfig JSON解析失败: {Json}",
                 authConfigJson?.Length > 200 ? authConfigJson[..200] : authConfigJson);
         }
-        _logger.LogInformation("AuthConfig解析: Token={T}, CookieName={CN}, Value={V}",
-            authConfig?.Token != null,
-            authConfig?.Token?.CookieName ?? "null",
-            authConfig?.Token?.Value != null ? "有值" : "null");
 
         // 解析导出配置
         var exportConfig = ParseExportConfig(exportConfigJson);
 
-        // 构建请求 headers（每个请求都带上）
+        // 构建请求 headers
         var requestHeaders = new Dictionary<string, string>();
         if (authConfig?.Headers != null)
+            foreach (var h in authConfig.Headers) requestHeaders[h.Key] = h.Value;
+
+        // 处理登录
+        var hasLogin = authConfig != null && !string.IsNullOrWhiteSpace(authConfig.LoginPath);
+        using var handler = new HttpClientHandler { UseCookies = false };
+        using var httpClient = new HttpClient(handler) { BaseAddress = new Uri(baseUrl), Timeout = TimeSpan.FromMinutes(3) };
+
+        string? sessionCookie = null;
+
+        // 执行登录
+        if (hasLogin)
         {
-            foreach (var h in authConfig.Headers)
-                requestHeaders[h.Key] = h.Value;
+            try
+            {
+                var loginDict = new Dictionary<string, string>();
+                if (!string.IsNullOrWhiteSpace(authConfig!.Username)) loginDict["username"] = authConfig.Username;
+                if (!string.IsNullOrWhiteSpace(authConfig.Password)) loginDict["password"] = authConfig.Password;
+                if (authConfig.ExtraFields != null)
+                    foreach (var kvp in authConfig.ExtraFields) loginDict[kvp.Key] = kvp.Value;
+                var loginUrl = authConfig.LoginPath!.StartsWith('/') ? authConfig.LoginPath : "/" + authConfig.LoginPath;
+                var loginResp = await httpClient.PostAsync(loginUrl, new FormUrlEncodedContent(loginDict), cancellationToken);
+                var loginBody = await loginResp.Content.ReadAsStringAsync();
+                _logger.LogInformation("登录 {Url} 返回 {Status}, Body: {Body}", loginUrl, loginResp.StatusCode, loginBody?.Length > 200 ? loginBody[..200] : loginBody);
+
+                // 手动提取 Set-Cookie（UseCookies=false 时才能读取）
+                if (loginResp.Headers.TryGetValues("Set-Cookie", out var cookies))
+                {
+                    foreach (var c in cookies)
+                    {
+                        _logger.LogInformation("Set-Cookie: {C}", c);
+                        var parts = c.Split(';');
+                        if (parts.Length > 0 && parts[0].Contains('='))
+                        {
+                            var kv = parts[0].Trim().Split('=', 2);
+                            if (kv.Length == 2 && kv[0].Equals("JSESSIONID", StringComparison.OrdinalIgnoreCase))
+                            {
+                                sessionCookie = $"{kv[0]}={kv[1]}";
+                                _logger.LogInformation("捕获到 {Cookie}={Val}", kv[0], kv[1]);
+                            }
+                        }
+                    }
+                }
+                else { _logger.LogWarning("登录响应中没有 Set-Cookie 头"); }
+            }
+            catch (Exception ex) { _logger.LogWarning(ex, "登录失败: {Message}", ex.Message); }
         }
+
+        // 将登录捕获的 session cookie 加入请求头
+        if (sessionCookie != null)
+            requestHeaders["Cookie"] = sessionCookie;
 
         // 认证：Cookie Token 或 Header Token
         if (authConfig?.Token != null && !string.IsNullOrWhiteSpace(authConfig.Token.CookieName)
@@ -344,7 +384,7 @@ public class CollectionExecutionService
                          .Replace("{{endDate}}", now.AddDays(-1).ToString("yyyy-MM-dd"))
                          .Replace("{{today}}", now.ToString("yyyy-MM-dd"))
                          .Replace("{{yesterday}}", now.AddDays(-1).ToString("yyyy-MM-dd"))
-                         .Replace("{{dayBeforeYesterday}}", now.AddDays(-2).ToString("yyyy-MM-dd"));
+                         .Replace("{{dayBeforeYesterday}}", now.AddDays(-2).ToString("yyyy-MM-dd")).Replace("{{7daysAgo}}", now.AddDays(-7).ToString("yyyy-MM-dd"));
                 obj[key] = JsonSerializer.SerializeToElement(val);
             }
             else if (obj[key].ValueKind == JsonValueKind.Object)
@@ -354,8 +394,19 @@ public class CollectionExecutionService
             }
             else if (obj[key].ValueKind == JsonValueKind.Array)
             {
-                var arr = obj[key].EnumerateArray().Select(el => el.ValueKind == JsonValueKind.String ? JsonSerializer.SerializeToElement(el.GetString()!.Replace("{{startDate}}", now.AddDays(-30).ToString("yyyy-MM-dd")).Replace("{{endDate}}", now.AddDays(-1).ToString("yyyy-MM-dd")).Replace("{{today}}", now.ToString("yyyy-MM-dd")).Replace("{{yesterday}}", now.AddDays(-1).ToString("yyyy-MM-dd")).Replace("{{dayBeforeYesterday}}", now.AddDays(-2).ToString("yyyy-MM-dd"))) : el).ToList();
-                obj[key] = JsonSerializer.SerializeToElement(arr);
+                var arrList = new List<JsonElement>();
+                foreach (var el in obj[key].EnumerateArray())
+                {
+                    if (el.ValueKind == JsonValueKind.String)
+                        arrList.Add(JsonSerializer.SerializeToElement(el.GetString()!.Replace("{{startDate}}", now.AddDays(-30).ToString("yyyy-MM-dd")).Replace("{{endDate}}", now.AddDays(-1).ToString("yyyy-MM-dd")).Replace("{{today}}", now.ToString("yyyy-MM-dd")).Replace("{{yesterday}}", now.AddDays(-1).ToString("yyyy-MM-dd")).Replace("{{dayBeforeYesterday}}", now.AddDays(-2).ToString("yyyy-MM-dd"))));
+                    else if (el.ValueKind == JsonValueKind.Object)
+                    {
+                        var nested = JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(el.GetRawText());
+                        if (nested != null) { ReplaceDateVars(nested, now); arrList.Add(JsonSerializer.SerializeToElement(nested)); }
+                    }
+                    else arrList.Add(el);
+                }
+                obj[key] = JsonSerializer.SerializeToElement(arrList);
             }
         }
     }
@@ -372,7 +423,7 @@ public class CollectionExecutionService
                 .Replace("{{endDate}}", now.AddDays(-1).ToString("yyyy-MM-dd"))
                 .Replace("{{today}}", now.ToString("yyyy-MM-dd"))
                 .Replace("{{yesterday}}", now.AddDays(-1).ToString("yyyy-MM-dd"))
-                .Replace("{{dayBeforeYesterday}}", now.AddDays(-2).ToString("yyyy-MM-dd"));
+                .Replace("{{dayBeforeYesterday}}", now.AddDays(-2).ToString("yyyy-MM-dd")).Replace("{{7daysAgo}}", now.AddDays(-7).ToString("yyyy-MM-dd"));
         }
         return resolved;
     }
@@ -391,19 +442,50 @@ public class CollectionExecutionService
             using var doc = JsonDocument.Parse(json);
             var root = doc.RootElement;
 
-            // 按 dataPath 导航，如 "data.data" 或 "data"
+            // 特殊格式: chartMain.data = [[{v:val},...],...]
+            if (root.TryGetProperty("chartMain", out var cm))
+            {
+                if (cm.TryGetProperty("data", out var cmData) && cmData.ValueKind == JsonValueKind.Array &&
+                    cm.TryGetProperty("column", out var col))
+                {
+                    var colNames = new List<string>();
+                    if (col.TryGetProperty("values", out var colVals) && colVals.ValueKind == JsonValueKind.Array)
+                    {
+                        foreach (var colGroup in colVals.EnumerateArray())
+                            foreach (var colDef in colGroup.EnumerateArray())
+                                colNames.Add(colDef.TryGetProperty("title", out var t) ? t.GetString() ?? "?" : "?");
+                    }
+                    foreach (var row in cmData.EnumerateArray())
+                    {
+                        var dict = new Dictionary<string, string>();
+                        int ci = 0;
+                        foreach (var cell in row.EnumerateArray())
+                        {
+                            var key = ci < colNames.Count ? colNames[ci] : $"Col{ci}";
+                            var val = cell.ValueKind == JsonValueKind.Object && cell.TryGetProperty("v", out var v)
+                        ? (v.ValueKind == JsonValueKind.String ? v.GetString() ?? "" : v.GetRawText())
+                        : cell.ValueKind == JsonValueKind.Null ? "" : cell.GetRawText();
+                            dict[key] = val;
+                            ci++;
+                        }
+                        if (dict.Count > 0) rows.Add(dict);
+                    }
+                    return (rows, rows.Count);
+                }
+            }
+
+            // 按 dataPath 导航
             var current = root;
             if (!string.IsNullOrWhiteSpace(dataPath))
             {
                 foreach (var segment in dataPath.Split('.'))
                 {
-                    if (current.TryGetProperty(segment, out var next))
-                        current = next;
+                    if (current.TryGetProperty(segment, out var next)) current = next;
                     else break;
                 }
             }
 
-            // 提取 totalCount（尝试多个字段名）
+            // 提取 totalCount
             if (root.TryGetProperty("data", out var dataEl2))
             {
                 if (dataEl2.TryGetProperty("totalCount", out var tc)) total = tc.GetInt32();
@@ -415,15 +497,10 @@ public class CollectionExecutionService
             JsonElement arrEl = current;
             if (current.ValueKind != JsonValueKind.Array)
             {
-                // 尝试 data.data
-                if (current.TryGetProperty("data", out var innerData) && innerData.ValueKind == JsonValueKind.Array)
-                    arrEl = innerData;
-                else if (current.TryGetProperty("rows", out var rowsEl) && rowsEl.ValueKind == JsonValueKind.Array)
-                    arrEl = rowsEl;
-                else if (current.TryGetProperty("items", out var itemsEl) && itemsEl.ValueKind == JsonValueKind.Array)
-                    arrEl = itemsEl;
-                else
-                    return (rows, total);
+                if (current.TryGetProperty("data", out var innerData) && innerData.ValueKind == JsonValueKind.Array) arrEl = innerData;
+                else if (current.TryGetProperty("rows", out var rowsEl) && rowsEl.ValueKind == JsonValueKind.Array) arrEl = rowsEl;
+                else if (current.TryGetProperty("items", out var itemsEl) && itemsEl.ValueKind == JsonValueKind.Array) arrEl = itemsEl;
+                else return (rows, total);
             }
 
             foreach (var item in arrEl.EnumerateArray())
@@ -435,19 +512,14 @@ public class CollectionExecutionService
                     {
                         JsonValueKind.String => prop.Value.GetString() ?? "",
                         JsonValueKind.Number => prop.Value.GetRawText(),
-                        JsonValueKind.True => "true",
-                        JsonValueKind.False => "false",
-                        JsonValueKind.Null => "",
-                        _ => prop.Value.ToString()
+                        JsonValueKind.True => "true", JsonValueKind.False => "false",
+                        JsonValueKind.Null => "", _ => prop.Value.ToString()
                     };
                 }
                 if (dict.Count > 0) rows.Add(dict);
             }
         }
-        catch (Exception ex)
-        {
-            // Don't throw - return what we have
-        }
+        catch (Exception) { }
         return (rows, total);
     }
 

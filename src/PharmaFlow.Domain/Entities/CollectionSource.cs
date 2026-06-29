@@ -48,7 +48,10 @@ public class CollectionSource : AuditableEntity
     /// <summary>最近一次采集状态 (空/成功/失败)</summary>
     public string? LastCollectionStatus { get; set; }
 
-    /// <summary>关联的导入规则 ID（可选，采集后自动按此规则处理）</summary>
+    /// <summary>采集完成后是否自动提交到汇总</summary>
+    public bool AutoSubmit { get; set; }
+
+    /// <summary>关联的导入规则 ID</summary>
     public Guid? RuleId { get; set; }
     public ImportRule? Rule { get; set; }
 

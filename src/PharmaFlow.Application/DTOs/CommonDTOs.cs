@@ -265,6 +265,7 @@ public record CollectionSourceDto
     public string? ScheduleCron { get; set; }
     public DateTime? LastCollectionAt { get; set; }
     public string? LastCollectionStatus { get; set; }
+    public bool AutoSubmit { get; set; }
     public Guid? RuleId { get; set; }
     public string? RuleName { get; set; }
 }
@@ -317,6 +318,17 @@ public record RejectRequest
 public record ManualTriggerRequest
 {
     public Guid SourceId { get; set; }
+}
+
+public record TokenUpdateRequest
+{
+    public string Token { get; set; } = "";
+    public string? CookieName { get; set; }
+}
+
+public record AutoSubmitRequest
+{
+    public bool AutoSubmit { get; set; }
 }
 
 // ── 批次处理 ──

@@ -56,6 +56,29 @@ public class CollectionController : ControllerBase
         return Ok(ApiResponse.Ok("更新成功"));
     }
 
+    [HttpPost("sources/{id:guid}/autosubmit")]
+    public async Task<ActionResult<ApiResponse>> SetAutoSubmit(Guid id, [FromBody] AutoSubmitRequest req)
+    {
+        var source = await _collectionService.GetSourceByIdAsync(id);
+        if (source == null) return NotFound(ApiResponse.Fail("采集源不存在"));
+        source.AutoSubmit = req.AutoSubmit;
+        await _collectionService.UpdateSourceAsync(source);
+        return Ok(ApiResponse.Ok(req.AutoSubmit ? "已开启自动提交" : "已关闭自动提交"));
+    }
+
+    [HttpPut("sources/{id:guid}/token")]
+    public async Task<ActionResult<ApiResponse>> UpdateToken(Guid id, [FromBody] TokenUpdateRequest req)
+    {
+        var source = await _collectionService.GetSourceByIdAsync(id);
+        if (source == null) return NotFound(ApiResponse.Fail("采集源不存在"));
+        source.AuthConfig = System.Text.Json.JsonSerializer.Serialize(new {
+            token = new { cookie_name = req.CookieName ?? "FLOW_TOKEN", value = req.Token },
+            headers = new { Origin = source.BaseUrl, Referer = source.BaseUrl + "/index.html" }
+        });
+        await _collectionService.UpdateSourceAsync(source);
+        return Ok(ApiResponse.Ok("Token已更新"));
+    }
+
     [HttpDelete("sources/{id:guid}")]
     public async Task<ActionResult<ApiResponse>> DeleteSource(Guid id)
     {

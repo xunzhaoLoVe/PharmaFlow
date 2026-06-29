@@ -4,19 +4,40 @@ import { PlusOutlined, ReloadOutlined, ThunderboltOutlined } from '@ant-design/i
 import type { ColumnsType } from 'antd/es/table';
 import { useAuthStore } from '../../store/authStore';
 import * as dcApi from '../../api/datacollection';
-import * as ruleApi from '../../api/importrules';
+
 import type { CollectionSourceDto, CollectionTaskDto, CollectionRecordDto } from '../../types';
 
 const COLUMN_NAMES: Record<string, string> = {
+  // 九州通 F字段
   FSELLDATE: '日期', FORDERNUMBER: '单据编号', FBRANCHORGNAME: '公司名称',
   FCUSTOMERCODE: '销往单位编码', FCUSTOMERNAME: '销往单位', FPRODUCTCODE: '药品编码',
   FPRODUCTNAME: '药品名称', FSPECIFICATION: '规格', FQUANTITY: '数量', FPRICE: '单价',
   FBATCHNUMBER: '批号', FBILLER: '开票员', FFACTORY: '生产厂家', FAREA: '区域',
-  FUNIT: '包装', IONAME: '库存组织', FDEPARTMENT: '所属部门', FBUYER: '采购员',
+  FUNIT: '包装单位', IONAME: '库存组织', FDEPARTMENT: '所属部门', FBUYER: '采购员',
   FVALIDITY: '有效期', BEIZHU: '备注', FBUSINESS_LICENSE_NO: '营业执照号',
   FSECONDCUSTCODE: '二级单位编号', FSECONDCUSTNAME: '二级单位名称',
   FORDERTYPE: '网上订单类型', FCUSTBUSINESSTYPE: '客户类型', GROUPSELLID: '销售记录ID',
   FBRANCHORGCODE: '分支机构编码', FNEWBRANCHORGNAME: '新分支机构名称',
+  FDZSW: '电商', CREATETIME: '创建时间', LASTMODIFYTIME: '最后修改时间',
+  FNEWBRANCHORGCODE: '新分支机构编码', FCUSTABBREVIATION: '客户简称',
+  FPRICE: '单价', FACTORY_SHORT: '生产厂家简称', FPACKAGE: '包装',
+  FCLEARING_AMT: '结算金额', IOID: '内部组织ID', FCUSTIDENTIFY: '单位识别',
+  FBRANCHORGCODE: '分支机构编码', FPARENTID: '上级编码', FAmount: '金额',
+  // 山东九州通
+  biaoshi: '标识', branchid: '公司', djbh: '单据编号', rq: '日期',
+  danwbh: '单位编号', dwmch: '客户名称', spbh: '药品编码', spmch: '药品名称',
+  shpgg: '规格', shengccj: '生产厂家', quyufl: '区域分类', cityname: '城市',
+  jlgg: '计量规格', dw: '单位', pihao: '批号', sxrq: '有效期',
+  shl: '数量', dj: '单价', cbdj: '成本单价', je: '金额',
+  dzsw: '电商', dirsalestaffname: '销售经理', businessman: '业务员',
+  ouname: '部门', usagename: '用途', ioname: '库存组织',
+  twocustname: '二级客户', FPARENTID: '上级编码',
+  // 通用
+  pageNum: '页码', isAsc: '排序', beginTime: '开始时间', endTime: '结束时间',
+  custno: '客户编号', custname: '客户名称', xsqy: '销售区域', khlx: '客户类型',
+  prodno: '产品编号', prodname: '产品名称', lotno: '批号',
+  total: '总数', code: '编码', msg: '消息', rows: '行数据',
+  EJDWBH: '二级单位编号', EJDWMC: '二级单位名称', SUPPLIER_NOTES: '供应商备注',
 };
 
 const SUMMARY_COLUMNS = [
@@ -56,18 +77,19 @@ function SourceTab({ canWrite }: { canWrite: boolean }) {
   const [modalOpen, setModalOpen] = useState(false);
   const [editing, setEditing] = useState<CollectionSourceDto | null>(null);
   const [form] = Form.useForm();
-  const [rules, setRules] = useState<{ id: string; name: string }[]>([]);
   const [logModal, setLogModal] = useState(false);
   const [logSourceId, setLogSourceId] = useState('');
+  const [tokenModal, setTokenModal] = useState(false);
+  const [tokenSourceId, setTokenSourceId] = useState('');
+  const [newToken, setNewToken] = useState('');
 
-  const loadRules = async () => { try { const r = await ruleApi.getRules({ page: 0, size: 99999 }); setRules(r.items); } catch { } };
   const load = useCallback(async () => {
     setLoading(true);
     try { const r = await dcApi.getSources({ page: 0, size: 99999 }); setData(r.items); }
     catch (e: any) { message.error(e?.message || '加载失败'); }
     finally { setLoading(false); }
   }, []);
-  useEffect(() => { load(); loadRules(); }, [load]);
+  useEffect(() => { load(); }, [load]);
 
   const applyHelper = () => {
     const v = form.getFieldsValue();
@@ -107,11 +129,15 @@ function SourceTab({ canWrite }: { canWrite: boolean }) {
     { title: '名称', dataIndex: 'name', width: 150 },
     { title: '平台', dataIndex: 'platformType', width: 80 },
     { title: 'URL', dataIndex: 'baseUrl', width: 180, ellipsis: true },
-    { title: '状态', dataIndex: 'isEnabled', width: 60, render: (v: boolean) => <Tag color={v ? 'green' : 'default'}>{v ? '启用' : '停用'}</Tag> },
+    { title: '状态', dataIndex: 'isEnabled', width: 100, render: (v: boolean, r: CollectionSourceDto) => {
+      if (r.lastCollectionStatus === 'Token已过期') return <Tag color="red">Token已过期</Tag>;
+      return <Tag color={v ? 'green' : 'default'}>{v ? '启用' : '停用'}</Tag>;
+    }},
     ...(canWrite ? [{ title: '操作', width: 220, render: (_: any, r: CollectionSourceDto) => (
       <Space>
         <Button size="small" icon={<ThunderboltOutlined />} onClick={() => handleTrigger(r.id)}>采集</Button>
         <Button size="small" onClick={() => { setEditing(r); fillFormFromSource(r); setModalOpen(true); }}>编辑</Button>
+        {r.lastCollectionStatus === 'Token已过期' && <Button size="small" danger onClick={() => { setTokenSourceId(r.id); setTokenModal(true); }}>更新Token</Button>}
         <Button size="small" onClick={() => { setLogSourceId(r.id); setLogModal(true); }}>日志</Button>
         <Popconfirm title="删除？" onConfirm={async () => { await dcApi.deleteSource(r.id); load(); }}>
           <Button size="small" danger>删除</Button>
@@ -135,8 +161,7 @@ function SourceTab({ canWrite }: { canWrite: boolean }) {
             <Form.Item name="isEnabled" label="启用" valuePropName="checked"><Switch /></Form.Item></Space>
           <Form.Item name="baseUrl" label="平台URL" rules={[{ required: true }]}><Input placeholder="http://example.com" /></Form.Item>
           <Form.Item name="scheduleCron" label="定时Cron" tooltip="留空仅手动"><Input placeholder="0 9 * * *" /></Form.Item>
-          <Form.Item name="ruleId" label="导入规则"><Select allowClear placeholder="可选" options={rules.map(r => ({ label: r.name, value: r.id }))} /></Form.Item>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
             <strong>认证配置 (JSON)</strong>
             <Button size="small" onClick={applyHelper}>生成默认模板</Button>
           </div>
@@ -149,6 +174,10 @@ function SourceTab({ canWrite }: { canWrite: boolean }) {
         </Form>
       </Modal>
       <SourceLogModal sourceId={logSourceId} open={logModal} onClose={() => setLogModal(false)} />
+      <Modal title="更新Token" open={tokenModal} onCancel={() => setTokenModal(false)}
+        onOk={async () => { if (!newToken.trim()) return; await dcApi.updateToken(tokenSourceId, newToken.trim()); message.success('Token已更新'); setTokenModal(false); setNewToken(''); load(); }}>
+        <Input.TextArea rows={3} value={newToken} onChange={e => setNewToken(e.target.value)} placeholder="粘贴新的Token值" />
+      </Modal>
     </div>
   );
 }
@@ -190,18 +219,25 @@ function DataManageTab() {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await dcApi.getTasks({ page: 0, size: 99999 });
-      setTasks(res.items);
-      setAutoRefresh(res.items.some(t => t.status === '执行中' || t.status === '待执行'));
+      const [taskRes, srcRes] = await Promise.all([
+        dcApi.getTasks({ page: 0, size: 99999 }),
+        dcApi.getSources({ page: 0, size: 99999 }),
+      ]);
+      // 合并 autoSubmit 到 tasks
+      const srcAutoSubmit: Record<string, boolean> = {};
+      srcRes.items.forEach(s => { srcAutoSubmit[s.id] = s.autoSubmit; });
+      const tasksWithFlag = taskRes.items.map(t => ({ ...t, autoSubmit: srcAutoSubmit[t.sourceId] || false }));
+      setTasks(tasksWithFlag);
+      setAutoRefresh(taskRes.items.some(t => t.status === '执行中' || t.status === '待执行'));
     } catch (e: any) { message.error(e?.message || '加载失败'); }
     finally { setLoading(false); }
   }, []);
   useEffect(() => { load(); }, [load]);
   useEffect(() => { if (!autoRefresh) return; const t = setInterval(load, 5000); return () => clearInterval(t); }, [autoRefresh, load]);
 
-  const groupedMap = new Map<string, { sourceName: string; sourceId: string; totalRecords: number; successCount: number; skipped: number; lastTaskId: string; lastTime: string; anySubmitted: boolean; runCount: number }>();
+  const groupedMap = new Map<string, { sourceName: string; sourceId: string; totalRecords: number; successCount: number; skipped: number; lastTaskId: string; lastTime: string; anySubmitted: boolean; runCount: number; autoSubmit: boolean }>();
   tasks.forEach(t => {
-    const g = groupedMap.get(t.sourceId) || { sourceName: t.sourceName, sourceId: t.sourceId, totalRecords: 0, successCount: 0, skipped: 0, lastTaskId: '', lastTime: '', anySubmitted: false, runCount: 0 };
+    const g = groupedMap.get(t.sourceId) || { sourceName: t.sourceName, sourceId: t.sourceId, totalRecords: 0, successCount: 0, skipped: 0, lastTaskId: '', lastTime: '', anySubmitted: false, runCount: 0, autoSubmit: false };
     g.totalRecords += t.totalRecords; g.successCount += t.successCount; g.skipped += t.skippedCount; g.runCount++;
     if (t.isSubmitted) g.anySubmitted = true;
     if (!g.lastTime || (t.startedAt && t.startedAt > g.lastTime)) { g.lastTime = t.startedAt || ''; g.lastTaskId = t.id; }
@@ -217,6 +253,11 @@ function DataManageTab() {
     { title: '重复', dataIndex: 'skipped', width: 60, render: (v: number) => v > 0 ? <span style={{ color: '#faad14' }}>{v}</span> : v },
     { title: '最近采集', dataIndex: 'lastTime', width: 150, render: (v: string) => v ? new Date(v).toLocaleString() : '-' },
     { title: '已提交', dataIndex: 'anySubmitted', width: 70, render: (v: boolean) => v ? <Tag color="blue">是</Tag> : <Tag>否</Tag> },
+    { title: '自动提交', width: 80, render: (_: any, r: any) => (
+      <Switch size="small" checked={r.autoSubmit} onChange={async (v) => {
+        try { await dcApi.setAutoSubmit(r.sourceId, v); load(); } catch { }
+      }} />
+    ) },
     { title: '操作', width: 200, render: (_: any, r: any) => (
       <Space>
         <Button size="small" onClick={() => { setSelectedTask({ id: '', sourceId: r.sourceId, sourceName: r.sourceName } as any); setViewModal(true); }}>查看数据</Button>
@@ -262,19 +303,22 @@ function TaskDataView({ taskId, sourceId }: { taskId?: string; sourceId?: string
     })();
   }, [taskId, sourceId]);
   const rows = data.map(r => { try { return { ...r, _p: JSON.parse(r.rawDataJson) }; } catch { return { ...r, _p: {} }; } });
-  const keys = new Set<string>(); rows.forEach(r => Object.keys(r._p).forEach(k => keys.add(k)));
+  const firstKeys = rows.length > 0 ? Object.keys(rows[0]._p) : [];
+  const extraKeys = rows.flatMap(r => Object.keys(r._p)).filter(k => !firstKeys.includes(k));
+  const keys = [...firstKeys, ...extraKeys];
   return <Table columns={[{ title: '状态', dataIndex: 'status', width: 60, fixed: 'left' as const, render: (v: string) => <Tag>{v}</Tag> },
-    ...Array.from(keys).map(k => ({ title: COLUMN_NAMES[k] || k, width: 120, ellipsis: true as const, render: (_: any, r: any) => { const v = r._p?.[k]; return v != null ? String(v) : ''; } })),
-  ]} dataSource={rows} rowKey="id" loading={loading} scroll={{ x: keys.size * 120 }} size="small"
+    ...keys.map(k => ({ title: COLUMN_NAMES[k] || k, width: 140, ellipsis: false as const, render: (_: any, r: any) => { const v = r._p?.[k]; return v != null ? String(v) : ''; } })),
+  ]} dataSource={rows} rowKey="id" loading={loading} scroll={{ x: Math.max(900, keys.length * 140) }} size="small"
     pagination={{ defaultPageSize: 20, showTotal: (t: number) => `${t} 条`, showSizeChanger: true }} />;
 }
 
 function TaskMapView({ taskId, sourceName, sourceId, onSaved }: { taskId?: string; sourceName: string; sourceId: string; onSaved: () => void }) {
   const [sourceFields, setSourceFields] = useState<string[]>([]);
+  const [previewRows, setPreviewRows] = useState<any[]>([]);
   const [mappings, setMappings] = useState<Record<string, string>>({});
   const [saving, setSaving] = useState(false);
   const canWrite = useAuthStore(s => s.canWrite);
-  useEffect(() => { if (!taskId) return; (async () => { try { const r = await dcApi.getRecords({ page: 0, size: 5, taskId }); const keys = new Set<string>(); r.items.forEach(x => { try { Object.keys(JSON.parse(x.rawDataJson)).forEach(k => keys.add(k)); } catch { } }); setSourceFields(Array.from(keys).sort()); const s = await dcApi.getSourceById(sourceId); if (s?.transformConfig) { try { const tc = JSON.parse(s.transformConfig); const ex: Record<string, string> = {}; if (tc.fieldMappings) Object.entries(tc.fieldMappings).forEach(([t, c]: [string, any]) => { ex[t] = c.source || t; }); if (tc.sourceType) ex['DataType'] = tc.sourceType; setMappings(ex); } catch { } } } catch { } })(); }, [taskId]);
+  useEffect(() => { if (!sourceId) return; (async () => { try { const r = await dcApi.getRecords({ page: 0, size: 5, sourceId }); const keys = new Set<string>(); const parsed = r.items.map(x => { try { return JSON.parse(x.rawDataJson); } catch { return {}; } }); parsed.forEach(p => Object.keys(p).forEach(k => keys.add(k))); const firstKeys = parsed.length > 0 ? Object.keys(parsed[0]) : []; const extra = Array.from(keys).filter(k => !firstKeys.includes(k)); setSourceFields([...firstKeys, ...extra]); setPreviewRows(parsed); const s = await dcApi.getSourceById(sourceId); if (s?.transformConfig) { try { const tc = JSON.parse(s.transformConfig); const ex: Record<string, string> = {}; if (tc.fieldMappings) Object.entries(tc.fieldMappings).forEach(([t, c]: [string, any]) => { ex[t] = c.source || t; }); if (tc.sourceType) ex['DataType'] = tc.sourceType; setMappings(ex); } catch { } } } catch { } })(); }, [sourceId]);
   const save = async () => { setSaving(true); try { const fm: Record<string, any> = {}; Object.entries(mappings).forEach(([t, s]) => { if (s && t !== 'DataType') fm[t] = { source: s }; }); const s = await dcApi.getSourceById(sourceId); let tc: any = {}; try { tc = JSON.parse(s?.transformConfig || '{}'); } catch { } tc = { ...tc, fieldMappings: fm, sourceType: mappings['DataType'] || '' }; await dcApi.updateSource(sourceId, { ...s, transformConfig: JSON.stringify(tc) }); message.success('保存成功'); onSaved(); } catch (e: any) { message.error(e?.message || '失败'); } finally { setSaving(false); } };
   return <div>
     <div style={{ marginBottom: 12, display: 'flex', gap: 12, alignItems: 'center' }}><span>采集源：</span><Tag color="blue">{sourceName}</Tag>
@@ -288,8 +332,14 @@ function TaskMapView({ taskId, sourceName, sourceId, onSaved }: { taskId?: strin
           ? <Tag color="blue">{v}</Tag>
           : r.isSelect
           ? <Select value={v || undefined} placeholder="选择" style={{ width: 220 }} onChange={(val) => setMappings(p => ({ ...p, [r.key]: val || '' }))} options={(r.options || []).map((o: string) => ({ label: o, value: o }))} />
-          : <Select value={v || undefined} allowClear placeholder="选择源字段" style={{ width: 220 }} onChange={(val) => setMappings(p => ({ ...p, [r.key]: val || '' }))} options={sourceFields.map(f => ({ label: `${COLUMN_NAMES[f] ? COLUMN_NAMES[f] + ' ' : ''}(${f})`, value: f }))} />,
+          : <Select value={v || undefined} allowClear placeholder="选择源字段" style={{ width: 220 }} onChange={(val) => setMappings(p => ({ ...p, [r.key]: val || '' }))} options={sourceFields.map(f => ({ label: `${COLUMN_NAMES[f] || f}`, value: f }))} />,
       }]} />
+    {previewRows.length > 0 && <>
+      <h4 style={{ marginTop: 12 }}>数据预览（前 {previewRows.length} 行）</h4>
+      <Table size="small" dataSource={previewRows.map((r, i) => ({ ...r, _idx: i }))} rowKey="_idx" scroll={{ x: sourceFields.length * 130 }}
+        pagination={false}
+        columns={sourceFields.map(f => ({ title: COLUMN_NAMES[f] || f, dataIndex: f, width: 130, ellipsis: true as const, render: (v: any) => v != null ? String(v) : '' }))} />
+    </>}
   </div>;
 }
 
@@ -302,8 +352,7 @@ function SummaryTab() {
   const [sources, setSources] = useState<CollectionSourceDto[]>([]);
   const [sourceFilter, setSourceFilter] = useState<string | undefined>();
 
-  useEffect(() => { (async () => { try { const r = await dcApi.getSources({ page: 0, size: 99999 }); setSources(r.items); } catch { } })(); }, []);
-  const load = useCallback(async () => { setLoading(true); try { const [records, tasks] = await Promise.all([dcApi.getRecords({ page: 0, size: 99999, sourceId: sourceFilter }), dcApi.getTasks({ page: 0, size: 99999 })]); const submitted = new Set(tasks.items.filter(t => t.isSubmitted).map(t => t.sourceId)); const filtered = records.items.filter(x => submitted.has(x.sourceId)); const seen = new Set<string>(); const deduped = filtered.filter(x => seen.has(x.rawDataJson) ? false : (seen.add(x.rawDataJson), true)); setData(deduped); } catch { } finally { setLoading(false); } }, [sourceFilter]);
+  const load = useCallback(async () => { setLoading(true); try { const [records, tasks, freshSources] = await Promise.all([dcApi.getRecords({ page: 0, size: 99999, sourceId: sourceFilter }), dcApi.getTasks({ page: 0, size: 99999 }), dcApi.getSources({ page: 0, size: 99999 })]); setSources(freshSources.items); const submitted = new Set(tasks.items.filter(t => t.isSubmitted).map(t => t.sourceId)); const filtered = records.items.filter(x => submitted.has(x.sourceId)); const seen = new Set<string>(); const deduped = filtered.filter(x => seen.has(x.rawDataJson) ? false : (seen.add(x.rawDataJson), true)); setData(deduped); } catch { } finally { setLoading(false); } }, [sourceFilter]);
   useEffect(() => { load(); }, [load]);
 
   const sourceTypeMap: Record<string, string> = {};

@@ -199,8 +199,8 @@ const data = (res as any).data || [];
 ### 数据采集
 
 **三个 Tab 页面**：
-- **采集源配置**：管理采集源（认证+导出 JSON 配置），支持 Cookie/Token/表单登录，JSON/HTML/Excel 解析
-- **采集数据管理**：合并视图按源分组，查看数据、配置映射、提交到汇总
+- **采集源配置**：管理采集源（认证+导出 JSON 配置），支持 Cookie/Token/表单登录，JSON/HTML/Excel/chartMain 解析
+- **采集数据管理**：合并视图按源分组，查看数据、配置映射、提交到汇总、自动提交开关
 - **采集汇总**：统一固定列表格，按源筛选，支持清空
 
 **采集源配置 JSON 结构**：
@@ -209,6 +209,10 @@ const data = (res as any).data || [];
 // AuthConfig — 认证配置（支持 Cookie Token / Header Token / 表单登录）
 { "token": { "cookie_name": "FLOW_TOKEN", "value": "eyJ..." },
   "headers": { "Origin": "...", "Referer": "..." } }
+
+// 表单登录（自动获取 Cookie）
+{ "loginPath": "/login", "username": "user", "password": "pass",
+  "extraFields": { "rememberMe": "true" } }
 
 // ExportConfig — 导出配置（JSON POST / Form POST / GET，JSON/HTML/Excel 解析）
 { "export": { "url": "...", "method": "POST", "content_type": "application/json", "dataFormat": "json" },
@@ -228,11 +232,12 @@ const data = (res as any).data || [];
 |------|------|
 | `{{startDate}}` | 30天前 |
 | `{{endDate}}` | 昨天 |
+| `{{7daysAgo}}` | 7天前 |
 | `{{today}}` | 今天 |
 | `{{yesterday}}` | 昨天 |
 | `{{dayBeforeYesterday}}` | 前天 |
 
-**采集管道**：定时/手动触发 → HTTP 登录 → 分页导出 → JSON/HTML/Excel 解析 → SmartDataCleaner 三阶段清洗 → CollectionRecord → 去重存储 → 配置映射 → 提交汇总
+**采集管道**：定时/手动触发 → HTTP 登录 → 分页导出 → JSON/HTML/Excel/chartMain 解析 → SmartDataCleaner 三阶段清洗 → CollectionRecord → 去重存储 → 配置映射 → 提交汇总
 
 **定时调度**: `CollectionSchedulerHostedService` (BackgroundService) 每 60 秒轮询 `ScheduleCron` 表达式（如 `0 8 * * *` 每天8点）
 
@@ -244,4 +249,5 @@ const data = (res as any).data || [];
 - body_template变量不生效：确保放在外层（与export同级），不要放在export内部
 - Form POST参数缺失：params需放在export节点内部
 - 日期变量不替换：确认变量名拼写正确，`{{dayBeforeYesterday}}` 带完整驼峰
-- Token过期：从浏览器F12→Application→Cookies复制新Token
+- Token过期：从浏览器F12→Application→Cookies复制新Token，或用「更新Token」按钮
+- 华润chartMain null元素：解析器已处理
