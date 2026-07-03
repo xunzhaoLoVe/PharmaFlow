@@ -82,6 +82,8 @@ function SourceTab({ canWrite }: { canWrite: boolean }) {
   const [tokenModal, setTokenModal] = useState(false);
   const [tokenSourceId, setTokenSourceId] = useState('');
   const [newToken, setNewToken] = useState('');
+  const [scriptPath, setScriptPath] = useState('');
+  const collectionMode = Form.useWatch('collectionMode', form);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -93,6 +95,16 @@ function SourceTab({ canWrite }: { canWrite: boolean }) {
 
   const applyHelper = () => {
     const v = form.getFieldsValue();
+    if (v.collectionMode === 'PythonScript') {
+      if (!v.exportConfig || v.exportConfig === '{}') {
+        form.setFieldsValue({ exportConfig: JSON.stringify({ export: { pythonScript: '', dataFormat: 'json' } }, null, 2) });
+      }
+      if (!v.authConfig || v.authConfig === '{}') {
+        form.setFieldsValue({ authConfig: '{}' });
+      }
+      message.success('请在脚本路径中填写 Python 脚本的完整路径');
+      return;
+    }
     if (!v.authConfig || v.authConfig === '{}') {
       form.setFieldsValue({ authConfig: JSON.stringify({ headers: { 'User-Agent': 'Mozilla/5.0' } }, null, 2) });
     }
@@ -108,7 +120,11 @@ function SourceTab({ canWrite }: { canWrite: boolean }) {
   const handleSave = async () => {
     try {
       const v = await form.validateFields();
-      // JSON 文本框为权威来源，直接使用
+      // Python脚本模式：构造 exportConfig 包含脚本路径
+      if (v.collectionMode === 'PythonScript') {
+        v.authConfig = '{}';
+        v.exportConfig = JSON.stringify({ export: { pythonScript: scriptPath, dataFormat: 'json' } });
+      }
       if (!v.transformConfig) v.transformConfig = editing?.transformConfig || '{"targetEntity":"DistributionRecord","fieldMappings":{}}';
       if (editing) { await dcApi.updateSource(editing.id, v); message.success('更新成功'); }
       else { await dcApi.createSource(v); message.success('创建成功'); }
@@ -118,6 +134,9 @@ function SourceTab({ canWrite }: { canWrite: boolean }) {
 
   const fillFormFromSource = (src: CollectionSourceDto) => {
     form.setFieldsValue(src);
+    // Extract scriptPath from exportConfig for PythonScript mode
+    try { const ec = JSON.parse(src.exportConfig || '{}'); setScriptPath(ec.export?.pythonScript || ec.pythonScript || ''); }
+    catch { setScriptPath(''); }
   };
 
   const handleTrigger = async (id: string) => {
@@ -150,7 +169,7 @@ function SourceTab({ canWrite }: { canWrite: boolean }) {
     <div>
       <div style={{ marginBottom: 16, display: 'flex', justifyContent: 'space-between' }}>
         <Button icon={<ReloadOutlined />} onClick={load}>刷新</Button>
-        {canWrite && <Button type="primary" icon={<PlusOutlined />} onClick={() => { setEditing(null); form.resetFields(); form.setFieldsValue({ platformType: '流向平台', isEnabled: true }); setModalOpen(true); }}>新增采集源</Button>}
+        {canWrite && <Button type="primary" icon={<PlusOutlined />} onClick={() => { setEditing(null); form.resetFields(); form.setFieldsValue({ platformType: '流向平台', isEnabled: true, collectionMode: 'JsonConfig' }); setScriptPath(''); setModalOpen(true); }}>新增采集源</Button>}
       </div>
       <Table columns={columns} dataSource={data} rowKey="id" loading={loading} scroll={{ x: 800 }}
         pagination={{ defaultPageSize: 10, showTotal: (t) => `共 ${t} 条`, showSizeChanger: true }} />
@@ -160,14 +179,41 @@ function SourceTab({ canWrite }: { canWrite: boolean }) {
           <Space><Form.Item name="platformType" label="平台类型"><Select options={[{ label: '流向平台', value: '流向平台' }, { label: 'ERP系统', value: 'ERP系统' }, { label: '其他', value: '其他' }]} style={{ width: 130 }} /></Form.Item>
             <Form.Item name="isEnabled" label="启用" valuePropName="checked"><Switch /></Form.Item></Space>
           <Form.Item name="baseUrl" label="平台URL" rules={[{ required: true }]}><Input placeholder="http://example.com" /></Form.Item>
+          <Form.Item name="collectionMode" label="配置模式" rules={[{ required: true }]}>
+            <Select options={[{ label: 'JSON配置', value: 'JsonConfig' }, { label: 'Python脚本', value: 'PythonScript' }]} style={{ width: 200 }}
+              onChange={(val) => { if (val === 'PythonScript') { setScriptPath(''); form.setFieldsValue({ authConfig: '{}' }); } }} />
+          </Form.Item>
           <Form.Item name="scheduleCron" label="定时Cron" tooltip="留空仅手动"><Input placeholder="0 9 * * *" /></Form.Item>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-            <strong>认证配置 (JSON)</strong>
-            <Button size="small" onClick={applyHelper}>生成默认模板</Button>
-          </div>
-          <Form.Item name="authConfig" rules={[{ required: true }]}><Input.TextArea rows={6} placeholder='{"token":{"cookie_name":"FLOW_TOKEN","value":"..."}}' /></Form.Item>
-          <strong>导出配置 (JSON)</strong>
-          <Form.Item name="exportConfig" rules={[{ required: true }]}><Input.TextArea rows={8} placeholder='{"export":{"url":"http://...","method":"POST","dataFormat":"json"}}' /></Form.Item>
+
+          {collectionMode !== 'PythonScript' && (
+            <>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+                <strong>认证配置 (JSON)</strong>
+                <Button size="small" onClick={applyHelper}>生成默认模板</Button>
+              </div>
+              <Form.Item name="authConfig" rules={[{ required: true }]}><Input.TextArea rows={6} placeholder='{"token":{"cookie_name":"FLOW_TOKEN","value":"..."}}' /></Form.Item>
+              <strong>导出配置 (JSON)</strong>
+              <Form.Item name="exportConfig" rules={[{ required: true }]}><Input.TextArea rows={8} placeholder='{"export":{"url":"http://...","method":"POST","dataFormat":"json"}}' /></Form.Item>
+            </>
+          )}
+
+          {collectionMode === 'PythonScript' && (
+            <>
+              <div style={{ marginBottom: 8 }}>
+                <strong>Python 脚本配置</strong>
+                <div style={{ color: '#888', fontSize: 12, marginBottom: 8 }}>
+                  脚本需输出 JSON 数组到 stdout，认证和导出均由脚本接管。
+                </div>
+              </div>
+              <Form.Item label="脚本路径" required>
+                <Input value={scriptPath} onChange={e => setScriptPath(e.target.value)}
+                  placeholder="e:\流向平台\PharmaFlow\scripts\qingdao_scraper.py" />
+              </Form.Item>
+              <Form.Item name="authConfig" hidden initialValue="{}"><Input /></Form.Item>
+              <Form.Item name="exportConfig" hidden initialValue="{}"><Input.TextArea /></Form.Item>
+            </>
+          )}
+
           <div style={{ color: '#888', fontSize: 12, marginBottom: 8 }}>
             字段映射+清洗请在「采集数据管理 → 配置映射」中设置
           </div>

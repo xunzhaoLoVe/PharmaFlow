@@ -258,6 +258,7 @@ public record CollectionSourceDto
     public string PlatformType { get; set; } = string.Empty;
     public string BaseUrl { get; set; } = string.Empty;
     public string AuthType { get; set; } = string.Empty;
+    public string CollectionMode { get; set; } = "JsonConfig";
     public string AuthConfig { get; set; } = "{}";
     public string ExportConfig { get; set; } = "{}";
     public string TransformConfig { get; set; } = "{}";

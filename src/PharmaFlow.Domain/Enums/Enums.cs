@@ -90,3 +90,12 @@ public enum TriggerType
     手动 = 0,
     定时 = 1,
 }
+
+/// <summary>采集配置模式</summary>
+public enum CollectionMode
+{
+    /// <summary>JSON配置：使用 AuthConfig + ExportConfig 进行 HTTP 认证和导出</summary>
+    JsonConfig = 0,
+    /// <summary>Python脚本：直接运行 Python 脚本接管采集流程</summary>
+    PythonScript = 1,
+}

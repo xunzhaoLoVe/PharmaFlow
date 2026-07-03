@@ -235,6 +235,7 @@ public class CollectionSourceConfiguration : IEntityTypeConfiguration<Collection
         builder.Property(e => e.TransformConfig).HasColumnType("text");
         builder.Property(e => e.ScheduleCron).HasMaxLength(100);
         builder.Property(e => e.LastCollectionStatus).HasMaxLength(50);
+        builder.Property(e => e.CollectionMode).HasConversion<string>().HasMaxLength(20);
         builder.HasOne(e => e.Rule).WithMany().HasForeignKey(e => e.RuleId).OnDelete(DeleteBehavior.SetNull);
         builder.HasQueryFilter(e => !e.IsDeleted);
     }

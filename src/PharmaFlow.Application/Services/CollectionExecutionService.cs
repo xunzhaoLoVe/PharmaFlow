@@ -1,9 +1,11 @@
 using System.Net;
 using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using ClosedXML.Excel;
 using HtmlAgilityPack;
 using Microsoft.Extensions.Logging;
+using PharmaFlow.Domain.Enums;
 
 namespace PharmaFlow.Application.Services;
 
@@ -26,6 +28,7 @@ public class CollectionExecutionService
 
     public async Task<List<CollectionRowResult>> ExecuteAsync(
         string baseUrl,
+        string collectionMode,
         string authType,
         string authConfigJson,
         string exportConfigJson,
@@ -33,6 +36,19 @@ public class CollectionExecutionService
         CancellationToken cancellationToken = default)
     {
         var results = new List<CollectionRowResult>();
+
+        // Python脚本模式：直接运行脚本接管采集流程
+        if (string.Equals(collectionMode, nameof(CollectionMode.PythonScript), StringComparison.OrdinalIgnoreCase))
+        {
+            var pyCfg = ParseExportConfig(exportConfigJson);
+            if (pyCfg != null && !string.IsNullOrWhiteSpace(pyCfg.PythonScript))
+            {
+                _logger.LogInformation("PythonScript 模式，执行脚本: {Path}", pyCfg.PythonScript);
+                return await ExecutePythonScriptAsync(pyCfg.PythonScript);
+            }
+            _logger.LogWarning("PythonScript 模式但 ExportConfig 中未配置 pythonScript 路径");
+            return results;
+        }
 
         // 解析认证配置
         AuthConfig? authConfig = null;
@@ -52,7 +68,11 @@ public class CollectionExecutionService
 
         // 处理登录
         var hasLogin = authConfig != null && !string.IsNullOrWhiteSpace(authConfig.LoginPath);
-        using var handler = new HttpClientHandler { UseCookies = false };
+        if (authConfig != null)
+            _logger.LogInformation("登录配置: Path={P}, CaptchaUrl={C}, LoginPageUrl={L}, BodyJson={B}",
+                authConfig.LoginPath, authConfig.CaptchaUrl ?? "null", authConfig.LoginPageUrl ?? "null",
+                authConfig.LoginBodyJson != null ? "有" : "null");
+        using var handler = new HttpClientHandler { UseCookies = false, AllowAutoRedirect = false };
         using var httpClient = new HttpClient(handler) { BaseAddress = new Uri(baseUrl), Timeout = TimeSpan.FromMinutes(3) };
 
         string? sessionCookie = null;
@@ -62,35 +82,49 @@ public class CollectionExecutionService
         {
             try
             {
-                var loginDict = new Dictionary<string, string>();
-                if (!string.IsNullOrWhiteSpace(authConfig!.Username)) loginDict["username"] = authConfig.Username;
-                if (!string.IsNullOrWhiteSpace(authConfig.Password)) loginDict["password"] = authConfig.Password;
-                if (authConfig.ExtraFields != null)
-                    foreach (var kvp in authConfig.ExtraFields) loginDict[kvp.Key] = kvp.Value;
-                var loginUrl = authConfig.LoginPath!.StartsWith('/') ? authConfig.LoginPath : "/" + authConfig.LoginPath;
-                var loginResp = await httpClient.PostAsync(loginUrl, new FormUrlEncodedContent(loginDict), cancellationToken);
-                var loginBody = await loginResp.Content.ReadAsStringAsync();
-                _logger.LogInformation("登录 {Url} 返回 {Status}, Body: {Body}", loginUrl, loginResp.StatusCode, loginBody?.Length > 200 ? loginBody[..200] : loginBody);
+                HttpContent? loginContent = null;
 
-                // 手动提取 Set-Cookie（UseCookies=false 时才能读取）
-                if (loginResp.Headers.TryGetValues("Set-Cookie", out var cookies))
+                // 验证码登录：先获取页面→获取验证码→OCR→提交
+                if (!string.IsNullOrWhiteSpace(authConfig!.CaptchaUrl) && !string.IsNullOrWhiteSpace(authConfig.LoginPageUrl))
                 {
-                    foreach (var c in cookies)
+                    sessionCookie = await CaptchaLoginAsync(httpClient, authConfig, cancellationToken);
+                }
+                else if (!string.IsNullOrWhiteSpace(authConfig!.LoginBodyJson))
+                {
+                    loginContent = new StringContent(authConfig.LoginBodyJson, Encoding.UTF8, "application/json");
+                }
+                else
+                {
+                    var loginDict = new Dictionary<string, string>();
+                    if (!string.IsNullOrWhiteSpace(authConfig.Username)) loginDict["username"] = authConfig.Username;
+                    if (!string.IsNullOrWhiteSpace(authConfig.Password)) loginDict["password"] = authConfig.Password;
+                    if (authConfig.ExtraFields != null)
+                        foreach (var kvp in authConfig.ExtraFields) loginDict[kvp.Key] = kvp.Value;
+                    loginContent = new FormUrlEncodedContent(loginDict);
+                }
+
+                if (sessionCookie == null && loginContent != null)
+                {
+                    var loginUrl = authConfig.LoginPath!.StartsWith('/') ? authConfig.LoginPath : "/" + authConfig.LoginPath;
+                    var loginResp = await httpClient.PostAsync(loginUrl, loginContent, cancellationToken);
+                    var loginBody = await loginResp.Content.ReadAsStringAsync();
+                    _logger.LogInformation("登录 {Url} 返回 {Status}, Body: {Body}", loginUrl, loginResp.StatusCode, loginBody?.Length > 200 ? loginBody[..200] : loginBody);
+
+                    if (loginResp.Headers.TryGetValues("Set-Cookie", out var cookies))
                     {
-                        _logger.LogInformation("Set-Cookie: {C}", c);
-                        var parts = c.Split(';');
-                        if (parts.Length > 0 && parts[0].Contains('='))
+                        var parts = new List<string>();
+                        foreach (var c in cookies)
                         {
-                            var kv = parts[0].Trim().Split('=', 2);
-                            if (kv.Length == 2 && kv[0].Equals("JSESSIONID", StringComparison.OrdinalIgnoreCase))
+                            var segs = c.Split(';');
+                            if (segs.Length > 0 && segs[0].Contains('='))
                             {
-                                sessionCookie = $"{kv[0]}={kv[1]}";
-                                _logger.LogInformation("捕获到 {Cookie}={Val}", kv[0], kv[1]);
+                                var kv = segs[0].Trim().Split('=', 2);
+                                if (kv.Length == 2) parts.Add($"{kv[0]}={kv[1]}");
                             }
                         }
+                        if (parts.Count > 0) { sessionCookie = string.Join("; ", parts); _logger.LogInformation("捕获Cookie: {C}", sessionCookie); }
                     }
                 }
-                else { _logger.LogWarning("登录响应中没有 Set-Cookie 头"); }
             }
             catch (Exception ex) { _logger.LogWarning(ex, "登录失败: {Message}", ex.Message); }
         }
@@ -233,7 +267,15 @@ public class CollectionExecutionService
         {
             var bytes = await DoExportAsync(httpClient, cfg, null, requestHeaders, ct);
             if (dataFormat == "html")
-                return ParseHtmlResponse(Encoding.UTF8.GetString(bytes), cfg.TableSelector, cfg.RowSelector);
+            {
+                _logger.LogInformation("HTML encoding config: '{Enc}', using: {Actual}",
+                    cfg.Encoding ?? "null",
+                    !string.IsNullOrWhiteSpace(cfg.Encoding) ? cfg.Encoding : "UTF8(default)");
+                var enc = !string.IsNullOrWhiteSpace(cfg.Encoding)
+                    ? Encoding.GetEncoding(cfg.Encoding)
+                    : Encoding.UTF8;
+                return ParseHtmlResponse(enc.GetString(bytes), cfg.TableSelector, cfg.RowSelector);
+            }
             else
                 return ParseExcelResponse(bytes);
         }
@@ -271,8 +313,36 @@ public class CollectionExecutionService
         var contentType = cfg.ContentType ?? "application/x-www-form-urlencoded";
         var now = DateTime.Now;
 
+        // 如果配置了 Python 脚本文件，直接调用脚本获取数据
+        if (!string.IsNullOrWhiteSpace(cfg.PythonScript))
+        {
+            var psi = new System.Diagnostics.ProcessStartInfo("python", "\"" + cfg.PythonScript + "\"")
+            { RedirectStandardOutput = true, UseShellExecute = false, CreateNoWindow = true };
+            var proc = System.Diagnostics.Process.Start(psi);
+            var scriptOutput = await proc!.StandardOutput.ReadToEndAsync();
+            proc.WaitForExit();
+            return Encoding.UTF8.GetBytes(scriptOutput ?? "[]");
+        }
+
         // 解析参数模板
         var resolvedParams = ResolveParams(cfg.QueryParams, now);
+
+        // 如果需要 ViewState，先 GET 页面提取
+        string? viewState = null, viewStateGen = null, eventVal = null;
+        if (!string.IsNullOrWhiteSpace(cfg.ViewStatePageUrl))
+        {
+            try
+            {
+                var vsUrl = cfg.ViewStatePageUrl.StartsWith('/') ? cfg.ViewStatePageUrl : cfg.ViewStatePageUrl;
+                var vsResp = await httpClient.GetAsync(vsUrl, ct);
+                var vsBytes = await vsResp.Content.ReadAsByteArrayAsync();
+                var vsHtml = Encoding.GetEncoding("gb2312").GetString(vsBytes);
+                viewState = Regex.Match(vsHtml, "id=\"__VIEWSTATE\" value=\"([^\"]+)\"", RegexOptions.IgnoreCase).Groups[1].Value;
+                viewStateGen = Regex.Match(vsHtml, "id=\"__VIEWSTATEGENERATOR\" value=\"([^\"]+)\"", RegexOptions.IgnoreCase).Groups[1].Value;
+                eventVal = Regex.Match(vsHtml, "id=\"__EVENTVALIDATION\" value=\"([^\"]+)\"", RegexOptions.IgnoreCase).Groups[1].Value;
+            }
+            catch { /* ignore */ }
+        }
 
         HttpRequestMessage req;
         if (method == "POST" && contentType.Contains("json"))
@@ -348,14 +418,25 @@ public class CollectionExecutionService
         foreach (var h in requestHeaders)
             req.Headers.TryAddWithoutValidation(h.Key, h.Value);
 
+        // 合并 ViewState 到 Form POST
+        if (viewState != null && method == "POST" && req.Content is FormUrlEncodedContent)
+        {
+            var formDict = new Dictionary<string, string>();
+            if (resolvedParams != null) foreach (var kvp in resolvedParams) formDict[kvp.Key] = kvp.Value;
+            formDict["__VIEWSTATE"] = viewState;
+            formDict["__VIEWSTATEGENERATOR"] = viewStateGen ?? "";
+            formDict["__EVENTVALIDATION"] = eventVal ?? "";
+            req.Content = new FormUrlEncodedContent(formDict);
+        }
+
         var resp = await httpClient.SendAsync(req, ct);
         var bytes = await resp.Content.ReadAsByteArrayAsync(ct);
         var respCt = resp.Content.Headers.ContentType?.MediaType ?? "";
         _logger.LogInformation("导出 {Url} 返回 {Status}, {Size} bytes, CT: {CT}",
             url, resp.StatusCode, bytes.Length, respCt);
 
-        // 调试：打印 JSON 前 500 字符
-        if (respCt.Contains("json"))
+        // 调试：打印 HTML/JSON 前 500 字符
+        if (respCt.Contains("html") || respCt.Contains("json"))
         {
             var debugJson = Encoding.UTF8.GetString(bytes);
             if (debugJson.Length > 500) debugJson = debugJson[..500];
@@ -381,10 +462,13 @@ public class CollectionExecutionService
             {
                 var val = obj[key].GetString() ?? "";
                 val = val.Replace("{{startDate}}", now.AddDays(-30).ToString("yyyy-MM-dd"))
+                         .Replace("{{15daysAgo}}", now.AddDays(-15).ToString("yyyy-MM-dd"))
                          .Replace("{{endDate}}", now.AddDays(-1).ToString("yyyy-MM-dd"))
                          .Replace("{{today}}", now.ToString("yyyy-MM-dd"))
                          .Replace("{{yesterday}}", now.AddDays(-1).ToString("yyyy-MM-dd"))
-                         .Replace("{{dayBeforeYesterday}}", now.AddDays(-2).ToString("yyyy-MM-dd")).Replace("{{7daysAgo}}", now.AddDays(-7).ToString("yyyy-MM-dd"));
+                         .Replace("{{dayBeforeYesterday}}", now.AddDays(-2).ToString("yyyy-MM-dd"))
+                         .Replace("{{7daysAgo}}", now.AddDays(-7).ToString("yyyy-MM-dd"))
+                         .Replace("{{15daysAgo}}", now.AddDays(-15).ToString("yyyy-MM-dd"));
                 obj[key] = JsonSerializer.SerializeToElement(val);
             }
             else if (obj[key].ValueKind == JsonValueKind.Object)
@@ -398,7 +482,7 @@ public class CollectionExecutionService
                 foreach (var el in obj[key].EnumerateArray())
                 {
                     if (el.ValueKind == JsonValueKind.String)
-                        arrList.Add(JsonSerializer.SerializeToElement(el.GetString()!.Replace("{{startDate}}", now.AddDays(-30).ToString("yyyy-MM-dd")).Replace("{{endDate}}", now.AddDays(-1).ToString("yyyy-MM-dd")).Replace("{{today}}", now.ToString("yyyy-MM-dd")).Replace("{{yesterday}}", now.AddDays(-1).ToString("yyyy-MM-dd")).Replace("{{dayBeforeYesterday}}", now.AddDays(-2).ToString("yyyy-MM-dd"))));
+                        arrList.Add(JsonSerializer.SerializeToElement(el.GetString()!.Replace("{{startDate}}", now.AddDays(-30).ToString("yyyy-MM-dd")).Replace("{{endDate}}", now.AddDays(-1).ToString("yyyy-MM-dd")).Replace("{{today}}", now.ToString("yyyy-MM-dd")).Replace("{{yesterday}}", now.AddDays(-1).ToString("yyyy-MM-dd")).Replace("{{dayBeforeYesterday}}", now.AddDays(-2).ToString("yyyy-MM-dd")).Replace("{{7daysAgo}}", now.AddDays(-7).ToString("yyyy-MM-dd")).Replace("{{15daysAgo}}", now.AddDays(-15).ToString("yyyy-MM-dd"))));
                     else if (el.ValueKind == JsonValueKind.Object)
                     {
                         var nested = JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(el.GetRawText());
@@ -423,7 +507,9 @@ public class CollectionExecutionService
                 .Replace("{{endDate}}", now.AddDays(-1).ToString("yyyy-MM-dd"))
                 .Replace("{{today}}", now.ToString("yyyy-MM-dd"))
                 .Replace("{{yesterday}}", now.AddDays(-1).ToString("yyyy-MM-dd"))
-                .Replace("{{dayBeforeYesterday}}", now.AddDays(-2).ToString("yyyy-MM-dd")).Replace("{{7daysAgo}}", now.AddDays(-7).ToString("yyyy-MM-dd"));
+                .Replace("{{dayBeforeYesterday}}", now.AddDays(-2).ToString("yyyy-MM-dd"))
+            .Replace("{{7daysAgo}}", now.AddDays(-7).ToString("yyyy-MM-dd"))
+            .Replace("{{15daysAgo}}", now.AddDays(-15).ToString("yyyy-MM-dd"));
         }
         return resolved;
     }
@@ -576,23 +662,39 @@ public class CollectionExecutionService
             : doc.DocumentNode.SelectSingleNode(tableSelector);
         if (table == null) return rows;
 
-        var headerRow = table.SelectSingleNode(".//thead/tr") ?? table.SelectSingleNode(".//tr");
+        // 智能表头检测：找单元格最多的行（避免把标题行当表头）
+        HtmlNode? headerRow = null;
+        int maxCells = 0;
+        var allTrs = table.SelectNodes(".//tr");
+        if (allTrs != null)
+        {
+            foreach (var tr in allTrs)
+            {
+                var tds = tr.SelectNodes("td|th");
+                int count = tds?.Count ?? 0;
+                if (count > maxCells) { maxCells = count; headerRow = tr; }
+            }
+        }
+        if (headerRow == null) return rows;
+
         var headers = new List<string>();
-        if (headerRow != null)
-            foreach (var th in headerRow.SelectNodes("th|td") ?? headerRow.ChildNodes)
-                headers.Add(th.InnerText.Trim());
+        var headerCells = headerRow.SelectNodes("th|td") ?? headerRow.ChildNodes;
+        foreach (var th in headerCells)
+            headers.Add(th.InnerText.Trim());
 
         var sel = string.IsNullOrWhiteSpace(rowSelector) ? ".//tbody/tr" : rowSelector;
         var dataRows = table.SelectNodes(sel);
         if (dataRows == null) return rows;
 
+        var minCells = Math.Max(2, headers.Count / 2); // 至少要有表头一半的列才算数据行
         foreach (var tr in dataRows)
         {
+            if (tr == headerRow) continue; // 跳过表头行
             var cells = tr.SelectNodes("td|th");
-            if (cells == null || cells.Count == 0) continue;
+            if (cells == null || cells.Count < minCells) continue;
             var row = new Dictionary<string, string>();
-            for (int i = 0; i < cells.Count; i++)
-                row[i < headers.Count ? headers[i] : $"Column{i}"] = cells[i].InnerText.Trim();
+            for (int i = 0; i < cells.Count && i < headers.Count; i++)
+                row[headers[i]] = cells[i].InnerText.Trim();
             if (row.Count > 0) rows.Add(row);
         }
         return rows;
@@ -619,6 +721,9 @@ public class CollectionExecutionService
                 DataPath = GetString(exportEl, "dataPath") ?? "data.data",
                 TableSelector = GetString(exportEl, "tableSelector"),
                 RowSelector = GetString(exportEl, "rowSelector"),
+                Encoding = GetString(exportEl, "encoding"),
+                ViewStatePageUrl = GetString(exportEl, "viewStatePageUrl"),
+                PythonScript = GetString(exportEl, "pythonScript"),
                 QueryParams = ParseParams(exportEl),
             };
 
@@ -666,18 +771,135 @@ public class CollectionExecutionService
         return dict;
     }
 
-    private static string? GetString(JsonElement el, string name) =>
-        el.TryGetProperty(name, out var p) && p.ValueKind == JsonValueKind.String ? p.GetString() : null;
+    private static string? GetString(JsonElement el, string name)
+    {
+        // 大小写不敏感查找
+        foreach (var prop in el.EnumerateObject())
+            if (string.Equals(prop.Name, name, StringComparison.OrdinalIgnoreCase))
+                return prop.Value.ValueKind == JsonValueKind.String ? prop.Value.GetString() : null;
+        return null;
+    }
 
     // ═══════════════════════════════════════════
     // 内部模型
     // ═══════════════════════════════════════════
+
+    private async Task<string?> CaptchaLoginAsync(HttpClient httpClient, AuthConfig authConfig, CancellationToken ct)
+    {
+        // 1. GET 登录页获取 ViewState + SessionId
+        var pageUrl = authConfig.LoginPageUrl!.StartsWith('/') ? authConfig.LoginPageUrl : "/" + authConfig.LoginPageUrl;
+        var pageResp = await httpClient.GetAsync(pageUrl, ct);
+        var pageBytes = await pageResp.Content.ReadAsByteArrayAsync();
+        var pageHtml = Encoding.GetEncoding("gb2312").GetString(pageBytes);
+        var cookies1 = ExtractCookies(pageResp);
+        _logger.LogInformation("获取登录页: {Status}, Cookie={Ck}", pageResp.StatusCode, cookies1);
+
+        // 提取 ViewState
+        var viewState = Regex.Match(pageHtml, "id=\"__VIEWSTATE\" value=\"([^\"]+)\"", RegexOptions.IgnoreCase).Groups[1].Value;
+        var viewStateGen = Regex.Match(pageHtml, "id=\"__VIEWSTATEGENERATOR\" value=\"([^\"]+)\"", RegexOptions.IgnoreCase).Groups[1].Value;
+        var eventVal = Regex.Match(pageHtml, "id=\"__EVENTVALIDATION\" value=\"([^\"]+)\"", RegexOptions.IgnoreCase).Groups[1].Value;
+        if (string.IsNullOrEmpty(viewState)) { _logger.LogWarning("未提取到ViewState"); return null; }
+
+        // 2. GET 验证码图片
+        var captchaUrl = authConfig.CaptchaUrl!.Replace("{time}", DateTimeOffset.UtcNow.ToUnixTimeSeconds().ToString());
+        var captchaResp = await httpClient.GetAsync(captchaUrl, ct);
+        var captchaBytes = await captchaResp.Content.ReadAsByteArrayAsync();
+        _logger.LogInformation("验证码图片: {Status}, {Size} bytes", captchaResp.StatusCode, captchaBytes.Length);
+
+        // 3. OCR 识别（通过 Python 子进程）
+        string code;
+        try
+        {
+            var tmpFile = Path.GetTempFileName() + ".gif";
+            await File.WriteAllBytesAsync(tmpFile, captchaBytes, ct);
+            var psi = new System.Diagnostics.ProcessStartInfo("python", $"-c \"import sys; from PIL import Image; import pytesseract; img=Image.open('{tmpFile.Replace('\\', '/')}'); print(pytesseract.image_to_string(img, config='--psm 8 -c tessedit_char_whitelist=0123456789').strip())\"")
+            { RedirectStandardOutput = true, UseShellExecute = false, CreateNoWindow = true };
+            var proc = System.Diagnostics.Process.Start(psi);
+            code = (await proc!.StandardOutput.ReadToEndAsync()).Trim();
+            proc.WaitForExit();
+            File.Delete(tmpFile);
+            _logger.LogInformation("OCR识别: {Code}", code);
+        }
+        catch (Exception ex) { _logger.LogWarning(ex, "OCR失败: {Msg}", ex.Message); return null; }
+
+        if (code.Length < 3) { _logger.LogWarning("OCR结果太短: {Code}", code); return null; }
+
+        // 4. POST 登录
+        var loginDict = new Dictionary<string, string>
+        {
+            ["__VIEWSTATE"] = viewState,
+            ["__VIEWSTATEGENERATOR"] = viewStateGen,
+            ["__EVENTVALIDATION"] = eventVal,
+            ["tbaccount"] = authConfig.Username ?? "",
+            ["tbpassword"] = authConfig.Password ?? "",
+            ["tbvalid"] = code,
+            ["cb_save"] = "on",
+            ["imb_login.x"] = "50",
+            ["imb_login.y"] = "10",
+        };
+        if (authConfig.ExtraFields != null)
+            foreach (var kvp in authConfig.ExtraFields) loginDict[kvp.Key] = kvp.Value;
+
+        var loginUrl = authConfig.LoginPath!.StartsWith('/') ? authConfig.LoginPath : "/" + authConfig.LoginPath;
+        var loginResp = await httpClient.PostAsync(loginUrl, new FormUrlEncodedContent(loginDict), ct);
+        var loginBody = await loginResp.Content.ReadAsStringAsync();
+        var cookies2 = ExtractCookies(loginResp);
+        var allCookies = string.IsNullOrEmpty(cookies1) ? cookies2 : (string.IsNullOrEmpty(cookies2) ? cookies1 : $"{cookies1}; {cookies2}");
+        var loginRespBody = await loginResp.Content.ReadAsStringAsync();
+        _logger.LogInformation("登录结果: {Status}, Location={Loc}, Body={Body}, Cookie={Ck}", loginResp.StatusCode,
+            loginResp.Headers.Location?.ToString() ?? "none",
+            loginRespBody?.Length > 300 ? loginRespBody[..300] : loginRespBody,
+            allCookies);
+        // 手动跟随 302 重定向以获取完整 session
+        if (loginResp.StatusCode == HttpStatusCode.Redirect && loginResp.Headers.Location != null)
+        {
+            var redirUrl = loginResp.Headers.Location.ToString();
+            if (!redirUrl.StartsWith("http")) redirUrl = redirUrl.StartsWith('/') ? redirUrl : "/" + redirUrl;
+            var redirResp = await httpClient.GetAsync(redirUrl, ct);
+            var redirCookies = ExtractCookies(redirResp);
+            allCookies = MergeCookies(allCookies, redirCookies);
+        }
+        return allCookies;
+    }
+
+    private static string? ExtractCookies(HttpResponseMessage resp)
+    {
+        if (!resp.Headers.TryGetValues("Set-Cookie", out var cookies)) return null;
+        var parts = new List<string>();
+        foreach (var c in cookies)
+        {
+            var segs = c.Split(';');
+            if (segs.Length > 0 && segs[0].Contains('='))
+            {
+                var kv = segs[0].Trim().Split('=', 2);
+                if (kv.Length == 2) parts.Add($"{kv[0]}={kv[1]}");
+            }
+        }
+        return parts.Count > 0 ? string.Join("; ", parts) : null;
+    }
+
+    private static string? MergeCookies(string? a, string? b)
+    {
+        if (a == null) return b;
+        if (b == null) return a;
+        // 后出现的 cookie 覆盖先出现的同名 cookie
+        var dict = new Dictionary<string, string>();
+        foreach (var c in (a + "; " + b).Split("; "))
+        {
+            var kv = c.Split('=', 2);
+            if (kv.Length == 2) dict[kv[0].Trim()] = kv[1].Trim();
+        }
+        return string.Join("; ", dict.Select(kv => $"{kv.Key}={kv.Value}"));
+    }
 
     private class AuthConfig
     {
         public string? LoginPath { get; set; }
         public string? Username { get; set; }
         public string? Password { get; set; }
+        public string? LoginBodyJson { get; set; }
+        public string? CaptchaUrl { get; set; }
+        public string? LoginPageUrl { get; set; }
         public Dictionary<string, string>? ExtraFields { get; set; }
         public Dictionary<string, string>? LoginParams { get; set; }
         public Dictionary<string, string>? Headers { get; set; }
@@ -704,7 +926,10 @@ public class CollectionExecutionService
         public string? DataPath { get; set; }
         public string? TableSelector { get; set; }
         public string? RowSelector { get; set; }
+        public string? Encoding { get; set; }
         public string? BodyTemplate { get; set; }
+        public string? ViewStatePageUrl { get; set; }
+        public string? PythonScript { get; set; }
         public Dictionary<string, string>? QueryParams { get; set; }
         public PaginationConfig? Pagination { get; set; }
     }
@@ -714,6 +939,58 @@ public class CollectionExecutionService
         public int Limit { get; set; } = 1000;
         public string OffsetField { get; set; } = "limitOffset";
         public string LimitField { get; set; } = "limit";
+    }
+
+    /// <summary>执行 Python 脚本采集，读取 stdout JSON 数组</summary>
+    private async Task<List<CollectionRowResult>> ExecutePythonScriptAsync(string scriptPath)
+    {
+        var results = new List<CollectionRowResult>();
+
+        if (!System.IO.File.Exists(scriptPath))
+        {
+            _logger.LogError("Python 脚本不存在: {Path}", scriptPath);
+            return results;
+        }
+
+        var psi = new System.Diagnostics.ProcessStartInfo("python", "\"" + scriptPath + "\"")
+        {
+            RedirectStandardOutput = true,
+            UseShellExecute = false,
+            CreateNoWindow = true
+        };
+        var proc = System.Diagnostics.Process.Start(psi);
+        var output = await proc!.StandardOutput.ReadToEndAsync();
+        proc.WaitForExit();
+
+        if (proc.ExitCode != 0)
+        {
+            _logger.LogWarning("Python 脚本退出码 {Code}: {Out}",
+                proc.ExitCode, output?.Length > 300 ? output[..300] : output);
+        }
+
+        try
+        {
+            var jsonRows = JsonSerializer.Deserialize<List<Dictionary<string, string>>>(output);
+            if (jsonRows != null)
+            {
+                foreach (var row in jsonRows)
+                {
+                    results.Add(new CollectionRowResult
+                    {
+                        RawDataJson = JsonSerializer.Serialize(row),
+                        CleanedDataJson = JsonSerializer.Serialize(row),
+                        TargetEntityType = "DistributionRecord",
+                    });
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Python 结果 JSON 解析失败: {Out}",
+                output?.Length > 200 ? output[..200] : output);
+        }
+
+        return results;
     }
 
     public class CollectionRowResult

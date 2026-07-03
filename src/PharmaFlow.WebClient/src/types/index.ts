@@ -245,6 +245,7 @@ export interface CollectionSourceDto {
   platformType: string;
   baseUrl: string;
   authType: string;
+  collectionMode: string;
   authConfig: string;
   exportConfig: string;
   transformConfig: string;

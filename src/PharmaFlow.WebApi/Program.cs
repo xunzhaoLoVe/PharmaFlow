@@ -6,6 +6,9 @@ using PharmaFlow.WebApi.Middleware;
 
 var builder = WebApplication.CreateBuilder(args);
 
+// ── Encoding ──
+System.Text.Encoding.RegisterProvider(System.Text.CodePagesEncodingProvider.Instance);
+
 // ── Database ──
 var dbProvider = builder.Configuration.GetValue<string>("DatabaseProvider", "SQLite");
 var connStr = (dbProvider != null ? builder.Configuration.GetConnectionString(dbProvider) : null)

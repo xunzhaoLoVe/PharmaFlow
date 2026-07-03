@@ -65,6 +65,7 @@ public class CollectionService : ICollectionService
             PlatformType = Enum.TryParse<CollectionPlatformType>(dto.PlatformType, out var pt) ? pt : CollectionPlatformType.流向平台,
             BaseUrl = dto.BaseUrl,
             AuthType = Enum.TryParse<CollectionAuthType>(dto.AuthType, out var at) ? at : CollectionAuthType.Cookie,
+            CollectionMode = Enum.TryParse<CollectionMode>(dto.CollectionMode, out var cm) ? cm : CollectionMode.JsonConfig,
             AuthConfig = dto.AuthConfig,
             ExportConfig = dto.ExportConfig,
             TransformConfig = dto.TransformConfig,
@@ -96,6 +97,7 @@ public class CollectionService : ICollectionService
         source.PlatformType = Enum.TryParse<CollectionPlatformType>(dto.PlatformType, out var pt) ? pt : CollectionPlatformType.流向平台;
         source.BaseUrl = dto.BaseUrl;
         source.AuthType = Enum.TryParse<CollectionAuthType>(dto.AuthType, out var at) ? at : CollectionAuthType.Cookie;
+        source.CollectionMode = Enum.TryParse<CollectionMode>(dto.CollectionMode, out var cm) ? cm : CollectionMode.JsonConfig;
         source.AuthConfig = dto.AuthConfig;
         source.ExportConfig = dto.ExportConfig;
         source.TransformConfig = dto.TransformConfig;
@@ -196,7 +198,7 @@ public class CollectionService : ICollectionService
 
         try
         {
-            var results = await _executionService.ExecuteAsync(source.BaseUrl, source.AuthType.ToString(), source.AuthConfig, source.ExportConfig, source.TransformConfig);
+            var results = await _executionService.ExecuteAsync(source.BaseUrl, source.CollectionMode.ToString(), source.AuthType.ToString(), source.AuthConfig, source.ExportConfig, source.TransformConfig);
 
             // 去重：获取已有 RawData 跳过重复
             var existingSet = new HashSet<string>(await _db.CollectionRecords.Where(r => r.SourceId == sourceId).Select(r => r.RawDataJson).ToListAsync());
@@ -417,6 +419,7 @@ public class CollectionService : ICollectionService
         PlatformType = s.PlatformType.ToString(),
         BaseUrl = s.BaseUrl,
         AuthType = s.AuthType.ToString(),
+        CollectionMode = s.CollectionMode.ToString(),
         AuthConfig = s.AuthConfig,
         ExportConfig = s.ExportConfig,
         TransformConfig = s.TransformConfig,

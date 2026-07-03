@@ -17,6 +17,9 @@ public class CollectionSource : AuditableEntity
     /// <summary>认证方式</summary>
     public CollectionAuthType AuthType { get; set; } = CollectionAuthType.Cookie;
 
+    /// <summary>配置模式：JSON配置 或 Python脚本</summary>
+    public CollectionMode CollectionMode { get; set; } = CollectionMode.JsonConfig;
+
     /// <summary>
     /// 认证配置 JSON。
     /// 示例: { "loginPath":"/login", "username":"...", "password":"...", "extraFields":{} }
