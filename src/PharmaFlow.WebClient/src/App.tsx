@@ -25,7 +25,35 @@ function PrivateRoute({ children }: { children: React.ReactNode }) {
 
 export default function App() {
   return (
-    <ConfigProvider locale={zhCN}>
+    <ConfigProvider
+      locale={zhCN}
+      theme={{
+        token: {
+          colorPrimary: '#1677ff',
+          colorSuccess: '#16a34a',
+          colorWarning: '#d97706',
+          colorError: '#dc2626',
+          colorInfo: '#0f766e',
+          borderRadius: 6,
+          fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif",
+        },
+        components: {
+          Card: {
+            borderRadiusLG: 6,
+            paddingLG: 20,
+          },
+          Table: {
+            headerBg: '#f8fafc',
+            headerColor: '#334155',
+            rowHoverBg: '#f8fbff',
+          },
+          Menu: {
+            itemBorderRadius: 6,
+            itemMarginInline: 10,
+          },
+        },
+      }}
+    >
       <BrowserRouter>
         <Routes>
           <Route path="/login" element={<LoginPage />} />

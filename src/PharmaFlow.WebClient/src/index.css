@@ -1,8 +1,341 @@
 body {
   margin: 0;
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  color: #172033;
+  background: #eef2f7;
 }
 
 #root {
   min-height: 100vh;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+.app-shell {
+  display: flex;
+  min-height: 100vh;
+  background: #eef2f7;
+}
+
+.app-sider {
+  position: sticky;
+  top: 0;
+  display: flex;
+  flex-direction: column;
+  width: 236px;
+  min-width: 236px;
+  height: 100vh;
+  overflow: auto;
+  background: #101828;
+  border-right: 1px solid rgba(255, 255, 255, 0.08);
+  transition: width 0.2s ease, min-width 0.2s ease;
+}
+
+.app-sider.is-collapsed {
+  width: 80px;
+  min-width: 80px;
+}
+
+.app-brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 64px;
+  padding: 0 18px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  flex-shrink: 0;
+}
+
+.app-brand-mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 6px;
+  background: #14b8a6;
+  color: #ffffff;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+
+.app-brand-text {
+  color: #f8fafc;
+  font-size: 17px;
+  font-weight: 700;
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.app-sider.is-collapsed .app-brand {
+  justify-content: center;
+  padding: 0;
+}
+
+.app-sider.is-collapsed .app-brand-text {
+  display: none;
+}
+
+.app-menu {
+  flex: 1;
+  padding: 12px 0;
+  background: transparent;
+}
+
+.app-menu.ant-menu-dark {
+  background: transparent;
+}
+
+.app-menu.ant-menu-dark .ant-menu-item {
+  height: 40px;
+  margin-bottom: 3px;
+  color: rgba(248, 250, 252, 0.72);
+}
+
+.app-menu.ant-menu-dark .ant-menu-item-selected {
+  background: #1677ff;
+  color: #ffffff;
+}
+
+.app-sider-footer {
+  padding: 12px 14px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  flex-shrink: 0;
+}
+
+.app-collapse-button {
+  color: rgba(248, 250, 252, 0.82);
+}
+
+.app-collapse-button:hover {
+  color: #ffffff !important;
+  background: rgba(255, 255, 255, 0.08) !important;
+}
+
+.app-main {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  flex-direction: column;
+}
+
+.app-topbar {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 58px;
+  padding: 0 24px;
+  background: rgba(255, 255, 255, 0.94);
+  border-bottom: 1px solid #e2e8f0;
+  backdrop-filter: blur(10px);
+}
+
+.app-page-heading {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.app-page-title {
+  color: #172033;
+  font-size: 16px;
+  font-weight: 700;
+  line-height: 1.2;
+}
+
+.app-page-path {
+  color: #64748b;
+  font-size: 12px;
+  line-height: 1.2;
+}
+
+.app-user-button {
+  height: 36px;
+  padding-inline: 12px;
+  color: #334155;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+}
+
+.app-content {
+  flex: 1;
+  min-width: 0;
+  padding: 20px 24px 28px;
+}
+
+.ant-card,
+.ant-table-wrapper {
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+}
+
+.ant-card {
+  border-color: #e2e8f0;
+}
+
+.ant-card-head {
+  min-height: 46px;
+  border-bottom-color: #edf2f7;
+}
+
+.ant-table-wrapper .ant-table {
+  border-radius: 6px;
+}
+
+.ant-tabs-nav {
+  margin-bottom: 18px !important;
+}
+
+.login-shell {
+  display: grid;
+  grid-template-columns: minmax(360px, 520px) minmax(360px, 430px);
+  gap: 48px;
+  align-items: center;
+  justify-content: center;
+  min-height: 100vh;
+  padding: 48px 32px;
+  background:
+    linear-gradient(90deg, rgba(20, 184, 166, 0.08) 0, rgba(20, 184, 166, 0.08) 1px, transparent 1px),
+    linear-gradient(0deg, rgba(22, 119, 255, 0.06) 0, rgba(22, 119, 255, 0.06) 1px, transparent 1px),
+    #eef2f7;
+  background-size: 34px 34px;
+}
+
+.login-panel {
+  max-width: 520px;
+}
+
+.login-brand {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-bottom: 64px;
+}
+
+.login-brand-mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 48px;
+  height: 48px;
+  border-radius: 8px;
+  color: #ffffff;
+  background: #0f766e;
+  font-size: 24px;
+}
+
+.login-brand h1,
+.login-copy h2,
+.login-card-head h2 {
+  margin: 0;
+}
+
+.login-brand h1 {
+  color: #111827;
+  font-size: 24px;
+  font-weight: 800;
+}
+
+.login-brand p {
+  margin: 3px 0 0;
+  color: #64748b;
+  font-size: 13px;
+}
+
+.login-copy h2 {
+  max-width: 520px;
+  color: #172033;
+  font-size: 34px;
+  line-height: 1.18;
+  font-weight: 800;
+}
+
+.login-copy p {
+  margin: 16px 0 0;
+  color: #475569;
+  font-size: 16px;
+}
+
+.login-metrics {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 28px;
+}
+
+.login-metrics span {
+  display: inline-flex;
+  align-items: center;
+  height: 30px;
+  padding: 0 12px;
+  border-radius: 999px;
+  color: #334155;
+  background: #ffffff;
+  border: 1px solid #dbe4ee;
+  font-size: 13px;
+}
+
+.login-card {
+  width: 100%;
+  border: 1px solid #dbe4ee;
+  box-shadow: 0 18px 45px rgba(15, 23, 42, 0.12);
+}
+
+.login-card .ant-card-body {
+  padding: 32px;
+}
+
+.login-card-head {
+  margin-bottom: 28px;
+}
+
+.login-card-head h2 {
+  color: #172033;
+  font-size: 22px;
+  font-weight: 800;
+}
+
+.login-card-head p {
+  margin: 6px 0 0;
+  color: #64748b;
+}
+
+@media (max-width: 900px) {
+  .app-sider {
+    width: 80px;
+    min-width: 80px;
+  }
+
+  .app-brand {
+    justify-content: center;
+    padding: 0;
+  }
+
+  .app-brand-text,
+  .app-page-path {
+    display: none;
+  }
+
+  .app-content {
+    padding: 16px;
+  }
+
+  .login-shell {
+    grid-template-columns: minmax(0, 430px);
+    gap: 28px;
+    padding: 32px 18px;
+  }
+
+  .login-brand {
+    margin-bottom: 28px;
+  }
+
+  .login-copy h2 {
+    font-size: 26px;
+  }
 }

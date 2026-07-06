@@ -40,7 +40,12 @@ export default function AppLayout() {
   const navigate = useNavigate();
   const location = useLocation();
   const { user, logout } = useAuthStore();
-  const siderW = collapsed ? 80 : 230;
+  const menuItems = filterMenu(user?.permissions || []);
+  const selectedKey = menuItems
+    .map(item => item.key)
+    .filter(key => location.pathname === key || location.pathname.startsWith(`${key}/`))
+    .sort((a, b) => b.length - a.length)[0] || location.pathname;
+  const currentMenu = menuItems.find(item => item.key === selectedKey);
 
   const handleLogout = () => { logout(); navigate('/login'); };
 
@@ -69,39 +74,42 @@ export default function AppLayout() {
   ];
 
   return (
-    <div style={{ display: 'flex' }}>
+    <div className="app-shell">
       {/* 侧边栏 */}
-      <div style={{ width: siderW, minWidth: siderW, background: '#001529', transition: 'width 0.2s', display: 'flex', flexDirection: 'column', position: 'sticky', top: 0, height: '100vh', overflow: 'auto' }}>
-        <div style={{ height: 64, display: 'flex', alignItems: 'center', justifyContent: 'center', borderBottom: '1px solid rgba(255,255,255,0.1)', flexShrink: 0 }}>
-          <span style={{ color: '#fff', fontSize: collapsed ? 16 : 18, fontWeight: 'bold', whiteSpace: 'nowrap', overflow: 'hidden' }}>
-            {collapsed ? '💊' : '💊 药品流向管理'}
+      <aside className={`app-sider ${collapsed ? 'is-collapsed' : ''}`}>
+        <div className="app-brand">
+          <span className="app-brand-mark">药</span>
+          <span className="app-brand-text">
+            药品流向管理
           </span>
         </div>
-        <Menu theme="dark" mode="inline" selectedKeys={[location.pathname]}
-          items={filterMenu(user?.permissions || [])}
-          onClick={({ key }) => navigate(key)} style={{ flex: 1 }} inlineCollapsed={collapsed} />
-        <div style={{ padding: '12px 16px', borderTop: '1px solid rgba(255,255,255,0.1)', flexShrink: 0 }}>
+        <Menu theme="dark" mode="inline" selectedKeys={[selectedKey]}
+          items={menuItems}
+          onClick={({ key }) => navigate(key)} className="app-menu" inlineCollapsed={collapsed} />
+        <div className="app-sider-footer">
           <Button type="text" block onClick={() => setCollapsed(!collapsed)}
             icon={collapsed ? <MenuUnfoldOutlined /> : <MenuFoldOutlined />}
-            style={{ color: '#fff' }}>{collapsed ? '' : '收起'}</Button>
+            className="app-collapse-button">{collapsed ? '' : '收起'}</Button>
         </div>
-      </div>
+      </aside>
 
       {/* 右侧内容 */}
-      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', background: '#f5f5f5' }}>
-        <div style={{ height: 48, background: '#fff', borderBottom: '1px solid #e8e8e8', display: 'flex', alignItems: 'center', justifyContent: 'flex-end', padding: '0 24px' }}>
+      <main className="app-main">
+        <header className="app-topbar">
+          <div className="app-page-heading">
+            <span className="app-page-title">{currentMenu?.label || '工作台'}</span>
+            <span className="app-page-path">{location.pathname}</span>
+          </div>
           <Dropdown menu={{ items: userMenuItems }} placement="bottomRight">
-            <Button type="text" icon={<UserOutlined />} style={{ cursor: 'pointer' }}>
+            <Button type="text" icon={<UserOutlined />} className="app-user-button">
               {user?.displayName || '用户'}
             </Button>
           </Dropdown>
-        </div>
-        <div style={{ flex: 1, padding: 16 }}>
-          <div style={{ background: '#fff', borderRadius: 8, padding: 24, minHeight: 280 }}>
-            <Outlet />
-          </div>
-        </div>
-      </div>
+        </header>
+        <section className="app-content">
+          <Outlet />
+        </section>
+      </main>
 
       {/* 修改密码弹窗 */}
       <Modal title="修改密码" open={pwdModalOpen} onOk={handleChangePwd} onCancel={() => { setPwdModalOpen(false); pwdForm.resetFields(); }} confirmLoading={pwdLoading}>

@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Form, Input, Button, Card, message, Checkbox } from 'antd';
-import { UserOutlined, LockOutlined } from '@ant-design/icons';
+import { UserOutlined, LockOutlined, MedicineBoxOutlined } from '@ant-design/icons';
 import { login } from '../api/auth';
 import { useAuthStore } from '../store/authStore';
 
@@ -35,14 +35,30 @@ export default function LoginPage() {
   };
 
   return (
-    <div style={{
-      minHeight: '100vh', display: 'flex', justifyContent: 'center',
-      alignItems: 'center', background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
-    }}>
-      <Card style={{ width: 400, borderRadius: 12, boxShadow: '0 8px 24px rgba(0,0,0,0.15)' }}>
-        <div style={{ textAlign: 'center', marginBottom: 32 }}>
-          <h1 style={{ fontSize: 28, margin: 0 }}>💊 药品流向管理</h1>
-          <p style={{ color: '#999', marginTop: 8 }}>药品流向管理平台</p>
+    <div className="login-shell">
+      <section className="login-panel">
+        <div className="login-brand">
+          <div className="login-brand-mark"><MedicineBoxOutlined /></div>
+          <div>
+            <h1>药品流向管理</h1>
+            <p>PharmaFlow</p>
+          </div>
+        </div>
+        <div className="login-copy">
+          <h2>流向采集、审核、预警一体化工作台</h2>
+          <p>面向药品渠道数据管理的日常运营界面。</p>
+        </div>
+        <div className="login-metrics">
+          <span>数据采集</span>
+          <span>流向审核</span>
+          <span>串货预警</span>
+        </div>
+      </section>
+
+      <Card className="login-card">
+        <div className="login-card-head">
+          <h2>登录系统</h2>
+          <p>使用平台账号继续</p>
         </div>
         <Form onFinish={onFinish} size="large" initialValues={{ remember: false }}>
           <Form.Item name="username" rules={[{ required: true, message: '请输入用户名' }]}>
