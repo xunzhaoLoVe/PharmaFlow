@@ -416,15 +416,7 @@ public class CollectionExecutionService
             if (obj[key].ValueKind == JsonValueKind.String)
             {
                 var val = obj[key].GetString() ?? "";
-                val = val.Replace("{{startDate}}", now.AddDays(-30).ToString("yyyy-MM-dd"))
-                         .Replace("{{15daysAgo}}", now.AddDays(-15).ToString("yyyy-MM-dd"))
-                         .Replace("{{endDate}}", now.AddDays(-1).ToString("yyyy-MM-dd"))
-                         .Replace("{{today}}", now.ToString("yyyy-MM-dd"))
-                         .Replace("{{yesterday}}", now.AddDays(-1).ToString("yyyy-MM-dd"))
-                         .Replace("{{dayBeforeYesterday}}", now.AddDays(-2).ToString("yyyy-MM-dd"))
-                         .Replace("{{7daysAgo}}", now.AddDays(-7).ToString("yyyy-MM-dd"))
-                         .Replace("{{15daysAgo}}", now.AddDays(-15).ToString("yyyy-MM-dd"));
-                val = ReplaceMonthVars(val, now);
+                val = ReplaceDatePlaceholders(val, now);
                 obj[key] = JsonSerializer.SerializeToElement(val);
             }
             else if (obj[key].ValueKind == JsonValueKind.Object)
@@ -439,8 +431,8 @@ public class CollectionExecutionService
                 {
                     if (el.ValueKind == JsonValueKind.String)
                     {
-                        var arrVal = el.GetString()!.Replace("{{startDate}}", now.AddDays(-30).ToString("yyyy-MM-dd")).Replace("{{endDate}}", now.AddDays(-1).ToString("yyyy-MM-dd")).Replace("{{today}}", now.ToString("yyyy-MM-dd")).Replace("{{yesterday}}", now.AddDays(-1).ToString("yyyy-MM-dd")).Replace("{{dayBeforeYesterday}}", now.AddDays(-2).ToString("yyyy-MM-dd")).Replace("{{7daysAgo}}", now.AddDays(-7).ToString("yyyy-MM-dd")).Replace("{{15daysAgo}}", now.AddDays(-15).ToString("yyyy-MM-dd"));
-                        arrList.Add(JsonSerializer.SerializeToElement(ReplaceMonthVars(arrVal, now)));
+                        var arrVal = ReplaceDatePlaceholders(el.GetString()!, now);
+                        arrList.Add(JsonSerializer.SerializeToElement(arrVal));
                     }
                     else if (el.ValueKind == JsonValueKind.Object)
                     {
@@ -461,28 +453,31 @@ public class CollectionExecutionService
         var resolved = new Dictionary<string, string>();
         foreach (var kvp in template)
         {
-            var value = kvp.Value
-                .Replace("{{startDate}}", now.AddDays(-30).ToString("yyyy-MM-dd"))
-                .Replace("{{endDate}}", now.AddDays(-1).ToString("yyyy-MM-dd"))
-                .Replace("{{today}}", now.ToString("yyyy-MM-dd"))
-                .Replace("{{yesterday}}", now.AddDays(-1).ToString("yyyy-MM-dd"))
-                .Replace("{{dayBeforeYesterday}}", now.AddDays(-2).ToString("yyyy-MM-dd"))
-                .Replace("{{7daysAgo}}", now.AddDays(-7).ToString("yyyy-MM-dd"))
-                .Replace("{{15daysAgo}}", now.AddDays(-15).ToString("yyyy-MM-dd"));
-            resolved[kvp.Key] = ReplaceMonthVars(value, now);
+            resolved[kvp.Key] = ReplaceDatePlaceholders(kvp.Value, now);
         }
         return resolved;
     }
 
-    private static string ReplaceMonthVars(string value, DateTime now)
+    private static string ReplaceDatePlaceholders(string value, DateTime now)
+    {
+        var (start, end, firstThisMonth) = GetPreviousThreeMonthWindow(now);
+        return value
+            .Replace("{{startDate}}", start.ToString("yyyy-MM-dd"))
+            .Replace("{{endDate}}", end.ToString("yyyy-MM-dd"))
+            .Replace("{{today}}", now.ToString("yyyy-MM-dd"))
+            .Replace("{{yesterday}}", end.ToString("yyyy-MM-dd"))
+            .Replace("{{dayBeforeYesterday}}", now.AddDays(-2).ToString("yyyy-MM-dd"))
+            .Replace("{{7daysAgo}}", start.ToString("yyyy-MM-dd"))
+            .Replace("{{15daysAgo}}", start.ToString("yyyy-MM-dd"))
+            .Replace("{{lastMonthStart}}", start.ToString("yyyy-MM-dd"))
+            .Replace("{{lastMonthEnd}}", end.ToString("yyyy-MM-dd"))
+            .Replace("{{thisMonthStart}}", firstThisMonth.ToString("yyyy-MM-dd"));
+    }
+
+    private static (DateTime Start, DateTime End, DateTime FirstThisMonth) GetPreviousThreeMonthWindow(DateTime now)
     {
         var firstThisMonth = new DateTime(now.Year, now.Month, 1);
-        var firstLastMonth = firstThisMonth.AddMonths(-1);
-        var lastLastMonth = firstThisMonth.AddDays(-1);
-        return value
-            .Replace("{{lastMonthStart}}", firstLastMonth.ToString("yyyy-MM-dd"))
-            .Replace("{{lastMonthEnd}}", lastLastMonth.ToString("yyyy-MM-dd"))
-            .Replace("{{thisMonthStart}}", firstThisMonth.ToString("yyyy-MM-dd"));
+        return (firstThisMonth.AddMonths(-3), firstThisMonth.AddDays(-1), firstThisMonth);
     }
 
     // ═══════════════════════════════════════════

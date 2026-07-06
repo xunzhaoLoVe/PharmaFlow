@@ -9,8 +9,14 @@ if sys.stderr.encoding != 'utf-8':
     sys.stderr.reconfigure(encoding='utf-8', errors='replace')
 
 today = datetime.now()
-start_date = today - timedelta(days=7)
-end_date = today - timedelta(days=1)  # 7天前 → 昨天
+first_this_month = today.replace(day=1)
+start_month = first_this_month.month - 3
+start_year = first_this_month.year
+if start_month <= 0:
+    start_month += 12
+    start_year -= 1
+start_date = first_this_month.replace(year=start_year, month=start_month)
+end_date = first_this_month - timedelta(days=1)
 # GMDatePicker uses format without leading zeros: 2026/6/1 not 2026/06/01
 start = f"{start_date.year}/{start_date.month}/{start_date.day}"
 end = f"{end_date.year}/{end_date.month}/{end_date.day}"

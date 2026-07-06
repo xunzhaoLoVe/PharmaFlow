@@ -1,6 +1,6 @@
 """GWT 流向平台采集脚本 v2 — 使用 requests + 正确解析 GWT-RPC 响应"""
 import json, sys, os, re, requests
-from datetime import datetime
+from datetime import datetime, timedelta
 
 if sys.stdout.encoding != 'utf-8':
     sys.stdout.reconfigure(encoding='utf-8', errors='replace')
@@ -12,12 +12,14 @@ PAYLOAD_FILE = os.path.join(SCRIPT_DIR, "gwt_payload.bin")
 
 # ── 日期范围：上月1日 ~ 昨天 ──
 today = datetime.now()
-if today.month == 1:
-    sm, sy = 12, today.year - 1
-else:
-    sm, sy = today.month - 1, today.year
-start_date = f'{sy}-{sm:02d}-01'
-end_date = f'{today.year}-{today.month:02d}-{today.day:02d}'
+first_this_month = today.replace(day=1)
+start_month = first_this_month.month - 3
+start_year = first_this_month.year
+if start_month <= 0:
+    start_month += 12
+    start_year -= 1
+start_date = first_this_month.replace(year=start_year, month=start_month).strftime("%Y-%m-%d")
+end_date = (first_this_month - timedelta(days=1)).strftime("%Y-%m-%d")
 print(f"Range: {start_date} ~ {end_date}", file=sys.stderr)
 
 # ═══════════════ 自动登录 ═══════════════

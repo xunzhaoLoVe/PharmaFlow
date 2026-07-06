@@ -6,8 +6,14 @@ if sys.stdout.encoding != 'utf-8':
     sys.stdout.reconfigure(encoding='utf-8', errors='replace')
 
 today = datetime.now()
-start = (today - timedelta(days=7)).strftime("%Y-%m-%d")
-end = (today - timedelta(days=1)).strftime("%Y-%m-%d")
+first_this_month = today.replace(day=1)
+start_month = first_this_month.month - 3
+start_year = first_this_month.year
+if start_month <= 0:
+    start_month += 12
+    start_year -= 1
+start = first_this_month.replace(year=start_year, month=start_month).strftime("%Y-%m-%d")
+end = (first_this_month - timedelta(days=1)).strftime("%Y-%m-%d")
 
 BASE = "http://221.2.205.234:8890"
 HEADERS = {

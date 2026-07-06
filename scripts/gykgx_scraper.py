@@ -1,5 +1,5 @@
 import json, sys, os, hashlib, requests
-from datetime import datetime
+from datetime import datetime, timedelta
 
 if sys.stdout.encoding != "utf-8":
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -11,12 +11,14 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 TOKEN_FILE = os.path.join(SCRIPT_DIR, "gykgx_token.txt")
 
 today = datetime.now()
-if today.month == 1:
-    sm, sy = 12, today.year - 1
-else:
-    sm, sy = today.month - 1, today.year
-start_date = "{}-{:02d}-01".format(sy, sm)
-end_date = "{}-{:02d}-{:02d}".format(today.year, today.month, today.day)
+first_this_month = today.replace(day=1)
+start_month = first_this_month.month - 3
+start_year = first_this_month.year
+if start_month <= 0:
+    start_month += 12
+    start_year -= 1
+start_date = first_this_month.replace(year=start_year, month=start_month).strftime("%Y-%m-%d")
+end_date = (first_this_month - timedelta(days=1)).strftime("%Y-%m-%d")
 
 def auto_login():
     try:
