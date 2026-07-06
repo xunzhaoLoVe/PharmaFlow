@@ -62,6 +62,7 @@ const COLUMN_NAMES: Record<string, string> = {
   ownername: '归属', chgtype: '类型', secondCustDname: '二级客户',
   custAddress: '地址', ubatchno: '批号2',
   // 河北国药乐仁堂
+  ROWSN: '记录时间', rowsn: '记录时间',
   地市公司: '地市公司', 单据号: '单据号', 流向日期: '流向日期', 单据类型: '单据类型',
   供应商简称: '供应商简称', 客户编码: '客户编码', 客户名称: '客户名称', 客户简称: '客户简称',
   商品编码: '商品编码', 商品名称: '商品名称', 规格: '规格', 生产企业名称: '生产企业名称',
@@ -84,6 +85,35 @@ const SUMMARY_COLUMNS = [
   { key: 'Province', title: '区域', width: 150 },
   { key: 'ExpiryDate', title: '有效期', width: 110 },
 ] as const;
+
+type PostRuleCondition = { field: string; operator: string; value?: string };
+type UiPostRule = {
+  name?: string;
+  enabled: boolean;
+  action: 'update' | 'exclude';
+  excludeReason?: string;
+  conditions: PostRuleCondition[];
+  targetField: string;
+  newValue: string;
+};
+
+const CONDITION_OPERATORS = [
+  { label: '等于', value: 'equals' },
+  { label: '包含', value: 'contains' },
+  { label: '不等于', value: 'notEquals' },
+  { label: '不包含', value: 'notContains' },
+  { label: '为空', value: 'empty' },
+  { label: '不为空', value: 'notEmpty' },
+];
+
+const createRule = (): UiPostRule => ({
+  name: '',
+  enabled: true,
+  action: 'update',
+  conditions: [{ field: 'DrugName', operator: 'equals', value: '' }],
+  targetField: 'Specification',
+  newValue: '',
+});
 
 const AUTH_CONFIG_PLACEHOLDER = JSON.stringify({
   loginPath: '/prod-api/login',
@@ -374,11 +404,14 @@ function DataManageTab() {
         try { await dcApi.setAutoSubmit(r.sourceId, v); load(); } catch { }
       }} />
     ) },
-    { title: '操作', width: 200, render: (_: any, r: any) => (
+    { title: '操作', width: 260, render: (_: any, r: any) => (
       <Space>
         <Button size="small" onClick={() => { setSelectedTask({ id: '', sourceId: r.sourceId, sourceName: r.sourceName } as any); setViewModal(true); }}>查看数据</Button>
-        <Button size="small" onClick={async () => { const res = await dcApi.getTasks({ page: 0, size: 1, sourceId: r.sourceId }); if (res.items[0]) { setSelectedTask(res.items[0]); setMapModal(true); } }}>配置映射</Button>
+        <Button size="small" onClick={async () => { const res = await dcApi.getTasks({ page: 0, size: 1, sourceId: r.sourceId }); if (res.items[0]) { setSelectedTask(res.items[0]); setMapModal(true); } }}>映射/修正规则</Button>
         {!r.anySubmitted && <Button size="small" type="primary" onClick={async () => { const res = await dcApi.getTasks({ page: 0, size: 99999, sourceId: r.sourceId }); for (const t of res.items) { await dcApi.submitTask(t.id); } load(); message.success('已提交'); }}>提交</Button>}
+        {r.anySubmitted && <Popconfirm title="取消此采集源已提交到汇总的数据？" onConfirm={async () => { const res = await dcApi.getTasks({ page: 0, size: 99999, sourceId: r.sourceId }); for (const t of res.items.filter(x => x.isSubmitted)) { await dcApi.unsubmitTask(t.id); } load(); message.success('已取消提交'); }}>
+          <Button size="small">取消提交</Button>
+        </Popconfirm>}
         <Popconfirm title="删除此源所有数据？" onConfirm={async () => { const res = await dcApi.getTasks({ page: 0, size: 99999, sourceId: r.sourceId }); for (const t of res.items) { await dcApi.deleteTask(t.id); } load(); message.success('已删除'); }}>
           <Button size="small" danger>删除</Button>
         </Popconfirm>
@@ -395,7 +428,7 @@ function DataManageTab() {
       <Modal title={`数据 - ${selectedTask?.sourceName}`} open={viewModal} onCancel={() => setViewModal(false)} width={1200} footer={null}>
         <TaskDataView taskId={selectedTask?.id || undefined} sourceId={(selectedTask as any)?.sourceId} />
       </Modal>
-      <Modal title={`映射规则 - ${selectedTask?.sourceName}`} open={mapModal} onCancel={() => setMapModal(false)} width={800} footer={null}>
+      <Modal title={`映射/修正规则 - ${selectedTask?.sourceName}`} open={mapModal} onCancel={() => setMapModal(false)} width={1040} footer={null}>
         <TaskMapView taskId={selectedTask?.id} sourceName={selectedTask?.sourceName || ''} sourceId={selectedTask?.sourceId || ''} onSaved={() => setMapModal(false)} />
       </Modal>
     </div>
@@ -418,27 +451,164 @@ function TaskDataView({ taskId, sourceId }: { taskId?: string; sourceId?: string
       } catch { } finally { setLoading(false); }
     })();
   }, [taskId, sourceId]);
-  const rows = data.map(r => { try { return { ...r, _p: JSON.parse(r.rawDataJson) }; } catch { return { ...r, _p: {} }; } });
+  const rows = data.map(r => {
+    let raw = {};
+    let cleaned: any = {};
+    try { raw = JSON.parse(r.rawDataJson); } catch { }
+    try { cleaned = JSON.parse(r.cleanedDataJson || '{}'); } catch { }
+    return { ...r, _p: raw, _excluded: cleaned?._excludedFromSummary === true || cleaned?._excludedFromSummary === 'true' || cleaned?._excludedFromSummary === 1 };
+  });
   const firstKeys = rows.length > 0 ? Object.keys(rows[0]._p) : [];
   const extraKeys = rows.flatMap(r => Object.keys(r._p)).filter(k => !firstKeys.includes(k));
   const keys = [...firstKeys, ...extraKeys];
-  return <Table columns={[{ title: '状态', dataIndex: 'status', width: 60, fixed: 'left' as const, render: (v: string) => <Tag>{v}</Tag> },
+  return <Table columns={[{ title: '状态', dataIndex: 'status', width: 90, fixed: 'left' as const, render: (v: string, r: any) => r._excluded ? <Tag color="orange">排除汇总</Tag> : <Tag>{v}</Tag> },
     ...keys.map(k => ({ title: COLUMN_NAMES[k] || k, width: 140, ellipsis: false as const, render: (_: any, r: any) => { const v = r._p?.[k]; return v != null ? String(v) : ''; } })),
   ]} dataSource={rows} rowKey="id" loading={loading} scroll={{ x: Math.max(900, keys.length * 140) }} size="small"
     pagination={{ defaultPageSize: 20, showTotal: (t: number) => `${t} 条`, showSizeChanger: true }} />;
 }
 
-function TaskMapView({ taskId, sourceName, sourceId, onSaved }: { taskId?: string; sourceName: string; sourceId: string; onSaved: () => void }) {
+function isExcludedFromSummary(cleanedDataJson?: string | null) {
+  if (!cleanedDataJson) return false;
+  try {
+    const parsed = JSON.parse(cleanedDataJson);
+    return parsed?._excludedFromSummary === true || parsed?._excludedFromSummary === 'true' || parsed?._excludedFromSummary === 1;
+  } catch {
+    return false;
+  }
+}
+
+function formatSummaryDate(value: unknown) {
+  if (value == null || value === '') return '';
+  const text = String(value).trim();
+  const match = text.match(/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})/);
+  if (match) return `${match[1]}-${match[2].padStart(2, '0')}-${match[3].padStart(2, '0')}`;
+  const date = new Date(text);
+  if (Number.isNaN(date.getTime())) return text;
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, '0');
+  const d = String(date.getDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
+}
+
+function TaskMapView({ sourceName, sourceId, onSaved }: { taskId?: string; sourceName: string; sourceId: string; onSaved: () => void }) {
   const [sourceFields, setSourceFields] = useState<string[]>([]);
   const [previewRows, setPreviewRows] = useState<any[]>([]);
   const [mappings, setMappings] = useState<Record<string, string>>({});
+  const [rules, setRules] = useState<UiPostRule[]>([]);
   const [saving, setSaving] = useState(false);
+  const [applying, setApplying] = useState(false);
   const canWrite = useAuthStore(s => s.canWrite);
-  useEffect(() => { if (!sourceId) return; (async () => { try { const r = await dcApi.getRecords({ page: 0, size: 5, sourceId }); const keys = new Set<string>(); const parsed = r.items.map(x => { try { return JSON.parse(x.rawDataJson); } catch { return {}; } }); parsed.forEach(p => Object.keys(p).forEach(k => keys.add(k))); const firstKeys = parsed.length > 0 ? Object.keys(parsed[0]) : []; const extra = Array.from(keys).filter(k => !firstKeys.includes(k)); setSourceFields([...firstKeys, ...extra]); setPreviewRows(parsed); const s = await dcApi.getSourceById(sourceId); if (s?.transformConfig) { try { const tc = JSON.parse(s.transformConfig); const ex: Record<string, string> = {}; if (tc.fieldMappings) Object.entries(tc.fieldMappings).forEach(([t, c]: [string, any]) => { ex[t] = c.source || t; }); if (tc.sourceType) ex['DataType'] = tc.sourceType; setMappings(ex); } catch { } } } catch { } })(); }, [sourceId]);
-  const save = async () => { setSaving(true); try { const fm: Record<string, any> = {}; Object.entries(mappings).forEach(([t, s]) => { if (s && t !== 'DataType') fm[t] = { source: s }; }); const s = await dcApi.getSourceById(sourceId); let tc: any = {}; try { tc = JSON.parse(s?.transformConfig || '{}'); } catch { } tc = { ...tc, fieldMappings: fm, sourceType: mappings['DataType'] || '' }; await dcApi.updateSource(sourceId, { ...s, transformConfig: JSON.stringify(tc) }); message.success('保存成功'); onSaved(); } catch (e: any) { message.error(e?.message || '失败'); } finally { setSaving(false); } };
+  const summaryFieldOptions = SUMMARY_COLUMNS.map(c => ({ label: c.title, value: c.key }));
+
+  useEffect(() => {
+    if (!sourceId) return;
+    (async () => {
+      try {
+        const r = await dcApi.getRecords({ page: 0, size: 5, sourceId });
+        const keys = new Set<string>();
+        const parsed = r.items.map(x => { try { return JSON.parse(x.rawDataJson); } catch { return {}; } });
+        parsed.forEach(p => Object.keys(p).forEach(k => keys.add(k)));
+        const firstKeys = parsed.length > 0 ? Object.keys(parsed[0]) : [];
+        const extra = Array.from(keys).filter(k => !firstKeys.includes(k));
+        setSourceFields([...firstKeys, ...extra]);
+        setPreviewRows(parsed);
+
+        const source = await dcApi.getSourceById(sourceId);
+        if (source?.transformConfig) {
+          const tc = JSON.parse(source.transformConfig || '{}');
+          const ex: Record<string, string> = {};
+          if (tc.fieldMappings) Object.entries(tc.fieldMappings).forEach(([t, c]: [string, any]) => { ex[t] = c.source || t; });
+          if (tc.sourceType) ex.DataType = tc.sourceType;
+          setMappings(ex);
+          setRules((tc.postProcessRules || []).map((rule: any) => {
+            const update = Object.entries(rule.updates || {})[0] as [string, any] | undefined;
+            return {
+              name: rule.name || '',
+              enabled: rule.enabled !== false,
+              action: rule.action === 'exclude' ? 'exclude' : 'update',
+              excludeReason: rule.excludeReason || '',
+              conditions: rule.conditions?.length ? rule.conditions : [{ field: 'DrugName', operator: 'equals', value: '' }],
+              targetField: update?.[0] || 'Specification',
+              newValue: update?.[1] != null ? String(update[1]) : '',
+            };
+          }));
+        }
+      } catch { }
+    })();
+  }, [sourceId]);
+
+  const buildTransformConfig = async () => {
+    const fm: Record<string, any> = {};
+    Object.entries(mappings).forEach(([t, s]) => { if (s && t !== 'DataType') fm[t] = { source: s }; });
+    const source = await dcApi.getSourceById(sourceId);
+    let tc: any = {};
+    try { tc = JSON.parse(source?.transformConfig || '{}'); } catch { }
+    tc = {
+      ...tc,
+      fieldMappings: fm,
+      sourceType: mappings.DataType || '',
+      postProcessRules: rules
+        .filter(r => r.action === 'exclude' || (r.targetField && r.newValue !== ''))
+        .map(r => ({
+          name: r.name || '',
+          enabled: r.enabled,
+          action: r.action,
+          excludeReason: r.excludeReason?.trim() || '',
+          conditions: (r.conditions || [])
+            .filter(c => c.field && c.operator)
+            .map(c => ({ ...c, value: c.value?.trim() || '' })),
+          updates: r.action === 'update' ? { [r.targetField]: r.newValue.trim() } : {},
+        })),
+    };
+    return { source, transformConfig: JSON.stringify(tc) };
+  };
+
+  const save = async (closeAfterSave = true) => {
+    setSaving(true);
+    try {
+      const { source, transformConfig } = await buildTransformConfig();
+      await dcApi.updateSource(sourceId, { ...source, transformConfig });
+      message.success('保存成功');
+      if (closeAfterSave) onSaved();
+      return true;
+    } catch (e: any) {
+      message.error(e?.message || '保存失败');
+      return false;
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const applyRules = async () => {
+    setApplying(true);
+    try {
+      const saved = await save(false);
+      if (!saved) return;
+      const result = await dcApi.reapplyTransform(sourceId);
+      message.success(`已处理 ${result.updatedRecords} 条，错误 ${result.errorRecords} 条`);
+      onSaved();
+    } catch (e: any) {
+      message.error(e?.message || '应用失败');
+    } finally {
+      setApplying(false);
+    }
+  };
+
+  const updateRule = (index: number, patch: Partial<UiPostRule>) =>
+    setRules(prev => prev.map((rule, i) => i === index ? { ...rule, ...patch } : rule));
+
+  const updateCondition = (ruleIndex: number, conditionIndex: number, patch: Partial<PostRuleCondition>) =>
+    setRules(prev => prev.map((rule, i) => {
+      if (i !== ruleIndex) return rule;
+      return { ...rule, conditions: rule.conditions.map((c, j) => j === conditionIndex ? { ...c, ...patch } : c) };
+    }));
+
   return <div>
-    <div style={{ marginBottom: 12, display: 'flex', gap: 12, alignItems: 'center' }}><span>采集源：</span><Tag color="blue">{sourceName}</Tag>
-      {canWrite && <Button type="primary" size="small" loading={saving} onClick={save}>保存映射</Button>}</div>
+    <div style={{ marginBottom: 12, display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
+      <span>采集源：</span><Tag color="blue">{sourceName}</Tag>
+      {canWrite && <Button type="primary" size="small" loading={saving} onClick={() => save(true)}>保存规则</Button>}
+      {canWrite && <Button size="small" loading={applying} onClick={applyRules}>应用到已采集数据</Button>}
+    </div>
     <Table size="small" dataSource={[
       { key: '_source', title: '采集源', source: sourceName || '-', readonly: true },
       ...SUMMARY_COLUMNS.map(c => ({ key: c.key, title: c.title, source: mappings[c.key] || '', isSelect: (c as any).isSelect, options: (c as any).options, readonly: false })),
@@ -450,6 +620,46 @@ function TaskMapView({ taskId, sourceName, sourceId, onSaved }: { taskId?: strin
           ? <Select value={v || undefined} placeholder="选择" style={{ width: 220 }} onChange={(val) => setMappings(p => ({ ...p, [r.key]: val || '' }))} options={(r.options || []).map((o: string) => ({ label: o, value: o }))} />
           : <Select value={v || undefined} allowClear placeholder="选择源字段" style={{ width: 220 }} onChange={(val) => setMappings(p => ({ ...p, [r.key]: val || '' }))} options={sourceFields.map(f => ({ label: `${COLUMN_NAMES[f] || f}`, value: f }))} />,
       }]} />
+
+    <div style={{ marginTop: 16 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+        <strong>数据修正规则</strong>
+        {canWrite && <Button size="small" onClick={() => setRules(prev => [...prev, createRule()])}>新增空白规则</Button>}
+      </div>
+      {rules.length === 0 && <div style={{ color: '#8c8c8c', padding: '8px 0' }}>暂无修正规则</div>}
+      {rules.map((rule, ruleIndex) => (
+        <div key={ruleIndex} style={{ border: '1px solid #f0f0f0', borderRadius: 6, padding: 12, marginBottom: 10 }}>
+          <Space wrap align="start">
+            <Switch size="small" checked={rule.enabled} onChange={(enabled) => updateRule(ruleIndex, { enabled })} />
+            <Input placeholder="规则名称" value={rule.name} style={{ width: 160 }} onChange={e => updateRule(ruleIndex, { name: e.target.value })} />
+            <span>动作</span>
+            <Select value={rule.action} style={{ width: 130 }} options={[
+              { label: '修改字段', value: 'update' },
+              { label: '排除汇总', value: 'exclude' },
+            ]} onChange={action => updateRule(ruleIndex, { action })} />
+            {rule.action === 'update' ? <>
+              <span>设置</span>
+              <Select value={rule.targetField} style={{ width: 140 }} options={summaryFieldOptions} onChange={targetField => updateRule(ruleIndex, { targetField })} />
+              <Input placeholder="新值" value={rule.newValue} style={{ width: 180 }} onChange={e => updateRule(ruleIndex, { newValue: e.target.value })} />
+            </> : <Input placeholder="排除原因（可选）" value={rule.excludeReason} style={{ width: 220 }} onChange={e => updateRule(ruleIndex, { excludeReason: e.target.value })} />}
+            <Button size="small" danger onClick={() => setRules(prev => prev.filter((_, i) => i !== ruleIndex))}>删除</Button>
+          </Space>
+          <div style={{ marginTop: 8 }}>
+            {rule.conditions.map((condition, conditionIndex) => (
+              <Space key={conditionIndex} wrap style={{ marginBottom: 6 }}>
+                <span>{conditionIndex === 0 ? '当' : '且'}</span>
+                <Select value={condition.field} style={{ width: 140 }} options={summaryFieldOptions} onChange={field => updateCondition(ruleIndex, conditionIndex, { field })} />
+                <Select value={condition.operator} style={{ width: 100 }} options={CONDITION_OPERATORS} onChange={operator => updateCondition(ruleIndex, conditionIndex, { operator })} />
+                {!['empty', 'notEmpty'].includes(condition.operator) && <Input value={condition.value} placeholder="匹配值" style={{ width: 200 }} onChange={e => updateCondition(ruleIndex, conditionIndex, { value: e.target.value })} />}
+                <Button size="small" onClick={() => updateRule(ruleIndex, { conditions: rule.conditions.filter((_, i) => i !== conditionIndex) })}>移除</Button>
+              </Space>
+            ))}
+            <Button size="small" onClick={() => updateRule(ruleIndex, { conditions: [...rule.conditions, { field: 'Specification', operator: 'equals', value: '' }] })}>添加条件</Button>
+          </div>
+        </div>
+      ))}
+    </div>
+
     {previewRows.length > 0 && <>
       <h4 style={{ marginTop: 12 }}>数据预览（前 {previewRows.length} 行）</h4>
       <Table size="small" dataSource={previewRows.map((r, i) => ({ ...r, _idx: i }))} rowKey="_idx" scroll={{ x: sourceFields.length * 130 }}
@@ -459,16 +669,14 @@ function TaskMapView({ taskId, sourceName, sourceId, onSaved }: { taskId?: strin
   </div>;
 }
 
-// ═══════════════════════════════════════
-// Tab 3: 采集汇总
-// ═══════════════════════════════════════
 function SummaryTab() {
   const [data, setData] = useState<CollectionRecordDto[]>([]);
   const [loading, setLoading] = useState(false);
+  const [syncing, setSyncing] = useState(false);
   const [sources, setSources] = useState<CollectionSourceDto[]>([]);
   const [sourceFilter, setSourceFilter] = useState<string | undefined>();
 
-  const load = useCallback(async () => { setLoading(true); try { const [records, tasks, freshSources] = await Promise.all([dcApi.getRecords({ page: 0, size: 99999, sourceId: sourceFilter }), dcApi.getTasks({ page: 0, size: 99999 }), dcApi.getSources({ page: 0, size: 99999 })]); setSources(freshSources.items); const submitted = new Set(tasks.items.filter(t => t.isSubmitted).map(t => t.sourceId)); const filtered = records.items.filter(x => submitted.has(x.sourceId)); const seen = new Set<string>(); const deduped = filtered.filter(x => seen.has(x.rawDataJson) ? false : (seen.add(x.rawDataJson), true)); setData(deduped); } catch { } finally { setLoading(false); } }, [sourceFilter]);
+  const load = useCallback(async () => { setLoading(true); try { const [records, tasks, freshSources] = await Promise.all([dcApi.getRecords({ page: 0, size: 99999, sourceId: sourceFilter }), dcApi.getTasks({ page: 0, size: 99999 }), dcApi.getSources({ page: 0, size: 99999 })]); setSources(freshSources.items); const submitted = new Set(tasks.items.filter(t => t.isSubmitted).map(t => t.id)); const filtered = records.items.filter(x => submitted.has(x.taskId) && !isExcludedFromSummary(x.cleanedDataJson)); const seen = new Set<string>(); const deduped = filtered.filter(x => seen.has(x.rawDataJson) ? false : (seen.add(x.rawDataJson), true)); setData(deduped); } catch { } finally { setLoading(false); } }, [sourceFilter]);
   useEffect(() => { load(); }, [load]);
 
   const sourceTypeMap: Record<string, string> = {};
@@ -479,7 +687,7 @@ function SummaryTab() {
   const columns: ColumnsType<any> = [
     { title: '采集源', dataIndex: 'sourceName', width: 120, fixed: 'left' as const, render: (v: string) => <Tag color="blue">{v}</Tag> },
     ...SUMMARY_COLUMNS.map(c => ({ title: c.title, width: c.width, ellipsis: true as const,
-      render: (_: any, r: any) => { const v = r._m?.[c.key]; if (v == null || v === '') return ''; const s = String(v); return (c.key === 'DistributionDate' || c.key === 'ExpiryDate') ? (s.includes('T') ? s.split('T')[0] : s) : s; },
+      render: (_: any, r: any) => { const v = r._m?.[c.key]; if (v == null || v === '') return ''; return (c.key === 'DistributionDate' || c.key === 'ExpiryDate') ? formatSummaryDate(v) : String(v); },
     })),
   ];
 
@@ -487,6 +695,18 @@ function SummaryTab() {
     <div style={{ marginBottom: 16, display: 'flex', gap: 12, alignItems: 'center' }}>
       <Select value={sourceFilter} allowClear placeholder="按采集源筛选" style={{ width: 200 }} onChange={(v) => setSourceFilter(v)} options={sources.map(s => ({ label: s.name, value: s.id }))} />
       <Button icon={<ReloadOutlined />} onClick={load}>刷新</Button>
+      <Button type="primary" loading={syncing} onClick={async () => {
+        setSyncing(true);
+        try {
+          const r = await dcApi.syncSummary(sourceFilter);
+          message.success(`同步完成：药品 ${r.createdDrugs} 个，客户 ${r.createdCustomers} 个，下游流转 ${r.createdDistributionRecords} 条，跳过 ${r.skippedRecords} 条`);
+        } catch (e: any) {
+          message.error(e?.message || '同步失败');
+        } finally {
+          setSyncing(false);
+          load();
+        }
+      }}>同步到业务数据</Button>
       <Popconfirm title="清空后数据从汇总移除，可在采集数据管理中重新提交" onConfirm={async () => { await dcApi.clearSummary(); load(); message.success('已清空'); }}>
         <Button danger>清空</Button>
       </Popconfirm>

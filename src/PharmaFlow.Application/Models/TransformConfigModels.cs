@@ -12,6 +12,7 @@ public class TransformConfig
     public ValidationConfig? Validation { get; set; }
     public MasterDataMatchConfig? MasterDataMatch { get; set; }
     public SmartCleaningConfig? SmartCleaning { get; set; }
+    public List<PostProcessRule>? PostProcessRules { get; set; }
 }
 
 public class FieldMapping
@@ -20,6 +21,23 @@ public class FieldMapping
     public string? Type { get; set; }
     public string? Format { get; set; }
     public object? Default { get; set; }
+}
+
+public class PostProcessRule
+{
+    public string? Name { get; set; }
+    public bool Enabled { get; set; } = true;
+    public string Action { get; set; } = "update";
+    public string? ExcludeReason { get; set; }
+    public List<PostProcessCondition>? Conditions { get; set; }
+    public Dictionary<string, string>? Updates { get; set; }
+}
+
+public class PostProcessCondition
+{
+    public string Field { get; set; } = "";
+    public string Operator { get; set; } = "equals";
+    public string? Value { get; set; }
 }
 
 // ═══════════════════════════════════════════

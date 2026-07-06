@@ -6,7 +6,7 @@ import {
   ShoppingCartOutlined, DollarOutlined,
   InboxOutlined, ApartmentOutlined, AlertOutlined,
   BarChartOutlined, LogoutOutlined, MenuFoldOutlined, MenuUnfoldOutlined,
-  UserOutlined, KeyOutlined, CloudDownloadOutlined, AuditOutlined, SettingOutlined,
+  UserOutlined, KeyOutlined, CloudDownloadOutlined,
 } from '@ant-design/icons';
 import { useAuthStore } from '../store/authStore';
 import { changePassword } from '../api/auth';
@@ -23,8 +23,6 @@ const ALL_MENU_ITEMS = [
   { key: '/reports', icon: <BarChartOutlined />, label: '报表统计', perm: 'reports' },
   { key: '/users', icon: <UserOutlined />, label: '用户管理', perm: 'users' },
   { key: '/datacollection', icon: <CloudDownloadOutlined />, label: '数据采集', perm: 'datacollection' },
-  { key: '/datacollection/review', icon: <AuditOutlined />, label: '数据审核', perm: 'datacollection' },
-  { key: '/importrules', icon: <SettingOutlined />, label: '导入规则', perm: 'datacollection' },
 ];
 
 function filterMenu(permissions: string[]) {

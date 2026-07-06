@@ -66,6 +66,13 @@ public class CollectionController : ControllerBase
         return Ok(ApiResponse.Ok(req.AutoSubmit ? "已开启自动提交" : "已关闭自动提交"));
     }
 
+    [HttpPost("sources/{id:guid}/reapply-transform")]
+    public async Task<ActionResult<ApiResponse<ReapplyTransformResultDto>>> ReapplyTransform(Guid id)
+    {
+        var result = await _collectionService.ReapplyTransformAsync(id);
+        return Ok(ApiResponse<ReapplyTransformResultDto>.Ok(result, "已重新应用映射和修正规则"));
+    }
+
     [HttpPut("sources/{id:guid}/token")]
     public async Task<ActionResult<ApiResponse>> UpdateToken(Guid id, [FromBody] TokenUpdateRequest req)
     {
@@ -120,11 +127,25 @@ public class CollectionController : ControllerBase
         return Ok(ApiResponse.Ok("已清空采集汇总"));
     }
 
+    [HttpPost("summary/sync")]
+    public async Task<ActionResult<ApiResponse<SyncSummaryResultDto>>> SyncSummary([FromQuery] Guid? sourceId = null)
+    {
+        var result = await _collectionService.SyncSummaryAsync(sourceId);
+        return Ok(ApiResponse<SyncSummaryResultDto>.Ok(result, "已同步采集汇总"));
+    }
+
     [HttpPost("tasks/{id:guid}/submit")]
     public async Task<ActionResult<ApiResponse>> SubmitTask(Guid id)
     {
         await _collectionService.SubmitTaskAsync(id);
         return Ok(ApiResponse.Ok("已提交到采集汇总"));
+    }
+
+    [HttpPost("tasks/{id:guid}/unsubmit")]
+    public async Task<ActionResult<ApiResponse>> UnsubmitTask(Guid id)
+    {
+        await _collectionService.UnsubmitTaskAsync(id);
+        return Ok(ApiResponse.Ok("已取消提交"));
     }
 
     [HttpDelete("tasks/{id:guid}")]

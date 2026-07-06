@@ -16,6 +16,18 @@ public class ReportsController : ControllerBase
         _reportService = reportService;
     }
 
+    [HttpGet("overview")]
+    public async Task<ActionResult<ApiResponse<ReportOverviewDto>>> GetOverview(
+        [FromQuery] DateTime? startDate = null,
+        [FromQuery] DateTime? endDate = null,
+        [FromQuery] string? granularity = null,
+        [FromQuery] string? drugName = null,
+        [FromQuery] string? customerName = null)
+    {
+        var data = await _reportService.GetOverviewAsync(startDate, endDate, granularity, drugName, customerName);
+        return Ok(ApiResponse<ReportOverviewDto>.Ok(data));
+    }
+
     [HttpGet("end-customer-sales")]
     public async Task<ActionResult<ApiResponse<List<EndCustomerSaleDto>>>> GetEndCustomerSales(
         [FromQuery] string? drugName = null,

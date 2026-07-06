@@ -332,6 +332,23 @@ public record AutoSubmitRequest
     public bool AutoSubmit { get; set; }
 }
 
+public record ReapplyTransformResultDto
+{
+    public Guid SourceId { get; set; }
+    public int TotalRecords { get; set; }
+    public int UpdatedRecords { get; set; }
+    public int ErrorRecords { get; set; }
+}
+
+public record SyncSummaryResultDto
+{
+    public int TotalRecords { get; set; }
+    public int CreatedDrugs { get; set; }
+    public int CreatedCustomers { get; set; }
+    public int CreatedDistributionRecords { get; set; }
+    public int SkippedRecords { get; set; }
+}
+
 // ── 批次处理 ──
 
 public record BatchPreviewDto

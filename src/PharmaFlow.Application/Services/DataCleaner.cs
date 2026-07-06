@@ -59,6 +59,8 @@ public class DataCleaner
                     cleaned[kvp.Key] = kvp.Value;
         }
 
+        ApplyPostProcessRules(cleaned, config.PostProcessRules);
+
         return (JsonSerializer.Serialize(cleaned), config.TargetEntity);
     }
 
@@ -82,6 +84,68 @@ public class DataCleaner
             "datetime" => TryParseDateTime(rawValue, format),
             "bool" => bool.TryParse(rawValue, out var b) && b,
             _ => rawValue
+        };
+    }
+
+    private static void ApplyPostProcessRules(
+        Dictionary<string, object?> cleaned,
+        List<PostProcessRule>? rules)
+    {
+        if (rules == null || rules.Count == 0) return;
+
+        foreach (var rule in rules)
+        {
+            if (!rule.Enabled) continue;
+            if (!MatchesAll(cleaned, rule.Conditions)) continue;
+
+            var action = (rule.Action ?? "update").Trim().ToLowerInvariant();
+            if (action == "exclude" || action == "excludefromsummary")
+            {
+                cleaned["_excludedFromSummary"] = true;
+                cleaned["_excludeReason"] = string.IsNullOrWhiteSpace(rule.ExcludeReason)
+                    ? rule.Name ?? ""
+                    : rule.ExcludeReason;
+                continue;
+            }
+
+            if (rule.Updates == null || rule.Updates.Count == 0) continue;
+
+            foreach (var update in rule.Updates)
+            {
+                if (!string.IsNullOrWhiteSpace(update.Key))
+                    cleaned[update.Key] = update.Value;
+            }
+        }
+    }
+
+    private static bool MatchesAll(
+        Dictionary<string, object?> cleaned,
+        List<PostProcessCondition>? conditions)
+    {
+        if (conditions == null || conditions.Count == 0) return true;
+        return conditions.All(condition => Matches(cleaned, condition));
+    }
+
+    private static bool Matches(
+        Dictionary<string, object?> cleaned,
+        PostProcessCondition condition)
+    {
+        if (string.IsNullOrWhiteSpace(condition.Field)) return false;
+
+        cleaned.TryGetValue(condition.Field, out var raw);
+        var actual = (raw?.ToString() ?? "").Trim();
+        var expected = (condition.Value ?? "").Trim();
+        var op = (condition.Operator ?? "equals").Trim().ToLowerInvariant();
+
+        return op switch
+        {
+            "equals" or "eq" => string.Equals(actual, expected, StringComparison.OrdinalIgnoreCase),
+            "notEquals" or "notequals" or "ne" => !string.Equals(actual, expected, StringComparison.OrdinalIgnoreCase),
+            "contains" => actual.Contains(expected, StringComparison.OrdinalIgnoreCase),
+            "notContains" or "notcontains" => !actual.Contains(expected, StringComparison.OrdinalIgnoreCase),
+            "empty" or "isEmpty" or "isempty" => string.IsNullOrWhiteSpace(actual),
+            "notEmpty" or "isNotEmpty" or "isnotempty" => !string.IsNullOrWhiteSpace(actual),
+            _ => string.Equals(actual, expected, StringComparison.OrdinalIgnoreCase),
         };
     }
 

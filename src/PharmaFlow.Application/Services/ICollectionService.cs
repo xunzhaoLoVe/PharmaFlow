@@ -17,7 +17,10 @@ public interface ICollectionService
     Task<CollectionTaskDto?> GetTaskByIdAsync(Guid id);
     Task DeleteTaskAsync(Guid id);
     Task SubmitTaskAsync(Guid id);
+    Task UnsubmitTaskAsync(Guid id);
     Task ClearSummaryAsync();
+    Task<SyncSummaryResultDto> SyncSummaryAsync(Guid? sourceId = null);
+    Task<ReapplyTransformResultDto> ReapplyTransformAsync(Guid sourceId);
 
     // Manual trigger
     Task<CollectionTaskDto> TriggerManualAsync(Guid sourceId, Guid? triggeredByUserId = null);

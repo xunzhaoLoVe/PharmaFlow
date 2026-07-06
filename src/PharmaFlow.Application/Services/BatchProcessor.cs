@@ -41,6 +41,7 @@ public class BatchProcessor
             {
                 using var doc = JsonDocument.Parse(record.CleanedDataJson);
                 var root = doc.RootElement;
+                if (IsExcludedFromSummary(root)) continue;
 
                 var drugName = root.TryGetProperty("DrugName", out var dn) ? dn.GetString() : null;
                 var spec = root.TryGetProperty("Specification", out var sp) ? sp.GetString() : null;
@@ -194,6 +195,11 @@ public class BatchProcessor
                 if (string.IsNullOrWhiteSpace(record.CleanedDataJson)) continue;
                 using var doc = JsonDocument.Parse(record.CleanedDataJson);
                 var root = doc.RootElement;
+                if (IsExcludedFromSummary(root))
+                {
+                    result.Skipped++;
+                    continue;
+                }
 
                 var drugName = root.TryGetProperty("DrugName", out var dn) ? dn.GetString() : "";
                 var spec = root.TryGetProperty("Specification", out var sp) ? sp.GetString() : "";
@@ -274,5 +280,19 @@ public class BatchProcessor
     {
         var seq = Interlocked.Increment(ref _codeSeq);
         return "DRUG" + DateTime.Now.ToString("yyyyMMddHHmmss") + seq.ToString("D4");
+    }
+
+    private static bool IsExcludedFromSummary(JsonElement root)
+    {
+        if (!root.TryGetProperty("_excludedFromSummary", out var excluded))
+            return false;
+
+        return excluded.ValueKind switch
+        {
+            JsonValueKind.True => true,
+            JsonValueKind.String => bool.TryParse(excluded.GetString(), out var b) && b,
+            JsonValueKind.Number => excluded.TryGetInt32(out var n) && n != 0,
+            _ => false,
+        };
     }
 }

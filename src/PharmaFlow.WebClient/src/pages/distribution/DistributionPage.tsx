@@ -1,6 +1,6 @@
-import { useEffect, useState, useCallback } from 'react';
-import { Table, Button, Space, Input, Empty, Tag, Popconfirm, message } from 'antd';
-import { SearchOutlined, ApartmentOutlined } from '@ant-design/icons';
+import { useEffect, useState, useCallback, useRef } from 'react';
+import { Table, Button, Space, Input, Empty, Tag, Popconfirm, message, Tooltip } from 'antd';
+import { SearchOutlined, ApartmentOutlined, FullscreenOutlined, ZoomInOutlined, ZoomOutOutlined } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
 import apiClient from '../../api/client';
 import { getDistribution, deleteDistribution } from '../../api/distribution';
@@ -9,6 +9,7 @@ import type { ApiResponse, DistributionRecordDto } from '../../types';
 // WPF 布局常量
 const COL_W = 420, NODE_W = 240, NODE_H = 150, ROW_GAP = 50, TOP_PAD = 50, LEFT_PAD = 16;
 const EDGE_NORMAL = '#64B5F6', EDGE_TRANSFER = '#BCAAA4', ARROW_SIZE = 10;
+const DEFAULT_APP_ZOOM = 1.25;
 
 // WPF 配色
 const TYPE_STYLE: Record<string, { bg: string; bar: string; text: string; icon: string }> = {
@@ -31,6 +32,10 @@ export default function DistributionPage() {
   const [searchBatch, setSearchBatch] = useState('');
   const [showTrace, setShowTrace] = useState(false);
   const [traceData, setTraceData] = useState<any>(null);
+  const [graphScale, setGraphScale] = useState<number | null>(null);
+  const [graphViewportWidth, setGraphViewportWidth] = useState(0);
+  const [graphViewportHeight, setGraphViewportHeight] = useState(0);
+  const graphViewportRef = useRef<HTMLDivElement | null>(null);
 
   const load = useCallback(async (drug = searchDrug, batch = searchBatch) => {
     setLoading(true);
@@ -42,6 +47,28 @@ export default function DistributionPage() {
 
   useEffect(() => { load(); }, []);
 
+  useEffect(() => {
+    if (!showTrace) return;
+    const el = graphViewportRef.current;
+    if (!el) return;
+
+    const updateSize = () => {
+      const rect = el.getBoundingClientRect();
+      setGraphViewportWidth(rect.width);
+      setGraphViewportHeight(rect.height);
+    };
+    updateSize();
+
+    const observer = new ResizeObserver(updateSize);
+    observer.observe(el);
+    window.addEventListener('resize', updateSize);
+
+    return () => {
+      observer.disconnect();
+      window.removeEventListener('resize', updateSize);
+    };
+  }, [showTrace, traceData]);
+
   const handleSearch = () => { setShowTrace(false); load(searchDrug, searchBatch); };
   const handleTrace = async () => {
     if (!searchBatch.trim()) { message.warning('请输入批号'); return; }
@@ -52,6 +79,7 @@ export default function DistributionPage() {
       });
       const graph = res.data;
       setTraceData(graph);
+      setGraphScale(null);
       const hasNodes = graph && graph.nodes && Object.keys(graph.nodes).length > 0;
       setShowTrace(!!hasNodes);
       if (!hasNodes) message.info('未找到该批号的流向数据');
@@ -145,6 +173,13 @@ export default function DistributionPage() {
 
     const canvasW = LEFT_PAD + (maxTier + 1) * COL_W + 80;
     const canvasH = maxY + TOP_PAD + 40;
+    const availableW = graphViewportWidth > 0 ? Math.max(graphViewportWidth - 28, 320) : canvasW;
+    const availableH = graphViewportHeight > 0 ? Math.max(graphViewportHeight - 28, 260) : canvasH;
+    const fitScale = Math.min(1, availableW / Math.max(canvasW, 1), availableH / Math.max(canvasH, 1));
+    const scale = graphScale ?? fitScale;
+    const needsScroll = graphScale !== null && (
+      canvasW * scale > availableW + 1 || canvasH * scale > availableH + 1
+    );
 
     // 构建 SVG 边
     const edges = Object.entries(edgesObj).map(([key, e]: [string, any]) => {
@@ -191,7 +226,16 @@ export default function DistributionPage() {
     }).filter(Boolean);
 
     return (
-      <div style={{ position: 'relative', width: canvasW, height: canvasH }}>
+      <div style={{
+        height: '100%',
+        padding: 14,
+        overflow: needsScroll ? 'auto' : 'hidden',
+        display: 'flex',
+        alignItems: needsScroll ? 'flex-start' : 'center',
+        justifyContent: needsScroll ? 'flex-start' : 'center',
+      }}>
+        <div style={{ position: 'relative', flex: '0 0 auto', width: Math.ceil(canvasW * scale), height: Math.ceil(canvasH * scale) }}>
+          <div style={{ position: 'absolute', left: 0, top: 0, width: canvasW, height: canvasH, transform: `scale(${scale})`, transformOrigin: 'top left' }}>
         {/* SVG 边层（z-index: 0） */}
         <svg style={{ position: 'absolute', inset: 0, width: canvasW, height: canvasH, zIndex: 0, overflow: 'visible' }}>
           <defs>
@@ -226,8 +270,34 @@ export default function DistributionPage() {
             </div>
           );
         })}
+          </div>
+        </div>
       </div>
     );
+  };
+
+  const traceNodeCount = traceData?.nodes ? Object.keys(traceData.nodes).length : 0;
+  const traceEdgeCount = traceData?.edges ? Object.keys(traceData.edges).length : 0;
+  const traceTierNumbers = traceData?.tiers
+    ? Object.keys(traceData.tiers).map(Number).filter(Number.isFinite)
+    : [0];
+  const traceMaxTier = Math.max(0, ...traceTierNumbers);
+  const traceTierRows = traceData?.tiers
+    ? Object.values(traceData.tiers).map((tier: any) => Array.isArray(tier) ? tier.length : 0)
+    : [1];
+  const traceMaxRows = Math.max(1, ...traceTierRows);
+  const traceCanvasWidth = LEFT_PAD + (traceMaxTier + 1) * COL_W + 80;
+  const traceCanvasHeight = TOP_PAD + Math.max(0, traceMaxRows - 1) * (NODE_H + ROW_GAP) + NODE_H + TOP_PAD + 40;
+  const fitGraphScale = graphViewportWidth > 0 && graphViewportHeight > 0
+    ? Math.min(
+        1,
+        Math.max(graphViewportWidth - 28, 320) / Math.max(traceCanvasWidth, 1),
+        Math.max(graphViewportHeight - 28, 260) / Math.max(traceCanvasHeight, 1),
+      )
+    : 1;
+  const activeGraphScale = graphScale ?? fitGraphScale;
+  const setManualGraphScale = (next: number) => {
+    setGraphScale(Math.min(1.25, Math.max(0.25, Number(next.toFixed(2)))));
   };
 
   return (
@@ -238,34 +308,48 @@ export default function DistributionPage() {
           onPressEnter={handleSearch} style={{ width: 160 }} allowClear />
         <Input placeholder="药品名称" value={searchDrug} onChange={e => setSearchDrug(e.target.value)}
           onPressEnter={handleSearch} style={{ width: 140 }} allowClear />
-        <Button type="primary" onClick={handleSearch}>查询</Button>
+        <Button type="primary" icon={<SearchOutlined />} onClick={handleSearch}>查询</Button>
         <Button icon={<ApartmentOutlined />} onClick={handleTrace} disabled={!searchBatch.trim()}>流向追溯</Button>
       </Space>
       {showTrace && traceData ? (
         <>
-          {/* 头部横幅 */}
-          <div style={{ background: '#1565C0', borderRadius: 12, padding: '16px 20px', marginBottom: 10, color: '#fff', boxShadow: '0 3px 10px rgba(0,0,0,0.15)' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <span style={{ fontSize: 18 }}>💊</span><span style={{ fontSize: 16, fontWeight: 700 }}>药品完整流向图</span>
+          <div style={{ background: '#fff', border: '1px solid #E2E8F0', borderRadius: 8, padding: '12px 14px', marginBottom: 10, boxShadow: '0 1px 2px rgba(15,23,42,0.04)' }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
+              <div style={{ minWidth: 0 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                  <span style={{ color: '#172033', fontSize: 16, fontWeight: 700 }}>药品完整流向图</span>
+                  <Tag color="blue">{traceNodeCount} 节点</Tag>
+                  <Tag color="cyan">{traceEdgeCount} 流向</Tag>
+                  <Tag>{Math.round(activeGraphScale * 100)}%</Tag>
+                </div>
+                <div style={{ display: 'flex', gap: 14, marginTop: 6, color: '#64748B', fontSize: 12, flexWrap: 'wrap' }}>
+                  <span style={{ color: '#0F172A', fontWeight: 600 }}>{traceData.drugName || '-'}</span>
+                  <span>批号: {traceData.batchNo || searchBatch}</span>
+                  {traceData.supplierName && <span>来源: {traceData.supplierName}</span>}
+                </div>
+              </div>
+              <Space.Compact>
+                <Tooltip title="适配窗口">
+                  <Button icon={<FullscreenOutlined />} onClick={() => setGraphScale(null)} />
+                </Tooltip>
+                <Tooltip title="缩小">
+                  <Button icon={<ZoomOutOutlined />} onClick={() => setManualGraphScale(activeGraphScale - 0.1)} />
+                </Tooltip>
+                <Tooltip title="放大">
+                  <Button icon={<ZoomInOutlined />} onClick={() => setManualGraphScale(activeGraphScale + 0.1)} />
+                </Tooltip>
+              </Space.Compact>
             </div>
-            <div style={{ display: 'flex', gap: 16, marginTop: 8 }}>
-              <span style={{ fontSize: 14, fontWeight: 600, color: '#90CAF9' }}>{traceData.drugName || ''}</span>
-              <span style={{ fontSize: 13, color: '#64B5F6' }}>批号: {traceData.batchNo || searchBatch}</span>
-            </div>
-            {traceData.supplierName && (
-              <div style={{ marginTop: 6, fontSize: 13, color: '#BBDEFB' }}>🏭 来源: {traceData.supplierName}</div>
-            )}
-            <div style={{ marginTop: 6, fontSize: 11, color: '#90CAF9' }}>涉及 {Object.keys(traceData.nodes || {}).length} 个节点 · {Object.keys(traceData.edges || {}).length} 条流向</div>
-          </div>
-          {/* 方向指示器 */}
-          <div style={{ background: '#F5F5F5', border: '1px solid #E0E0E0', borderRadius: 6, padding: '6px 12px', marginBottom: 10, fontSize: 11, color: '#888', display: 'flex', alignItems: 'center', gap: 6 }}>
-            <span style={{ color: '#1976D2', fontSize: 14 }}>▶</span>
-            <span>流向: 生产厂家 → 一级经销 → 二级经销 → 三级经销 → 终端销售</span>
-            <span style={{ marginLeft: 12 }}>——实线=分销</span>
-            <span style={{ borderBottom: '2px dashed #BCAAA4', paddingBottom: 1 }}>- -虚线=调拨</span>
           </div>
           {/* Canvas 流向图 */}
-          <div style={{ background: '#FAFBFC', borderRadius: 8, border: '1px solid #E8E8E8', overflow: 'auto', maxHeight: '70vh' }}>
+          <div ref={graphViewportRef} style={{
+            height: `calc((100vh - 230px) / ${DEFAULT_APP_ZOOM})`,
+            minHeight: 360,
+            background: '#F8FAFC',
+            borderRadius: 8,
+            border: '1px solid #E2E8F0',
+            overflow: 'hidden',
+          }}>
             {renderFlowGraph()}
           </div>
           <Button style={{ marginTop: 12 }} onClick={() => setShowTrace(false)}>返回列表</Button>

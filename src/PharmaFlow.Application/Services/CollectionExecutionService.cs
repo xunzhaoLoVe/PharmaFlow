@@ -45,7 +45,7 @@ public class CollectionExecutionService
             if (pyCfg != null && !string.IsNullOrWhiteSpace(pyCfg.PythonScript))
             {
                 _logger.LogInformation("PythonScript 模式，执行脚本: {Path}", pyCfg.PythonScript);
-                return await ExecutePythonScriptAsync(pyCfg.PythonScript);
+                return await ExecutePythonScriptAsync(pyCfg.PythonScript, transformConfigJson);
             }
             _logger.LogWarning("PythonScript 模式但 ExportConfig 中未配置 pythonScript 路径");
             return results;
@@ -1559,7 +1559,7 @@ public class CollectionExecutionService
     }
 
     /// <summary>执行 Python 脚本采集，读取 stdout JSON 数组</summary>
-    private async Task<List<CollectionRowResult>> ExecutePythonScriptAsync(string scriptPath)
+    private async Task<List<CollectionRowResult>> ExecutePythonScriptAsync(string scriptPath, string transformConfigJson)
     {
         var results = new List<CollectionRowResult>();
 
@@ -1590,15 +1590,36 @@ public class CollectionExecutionService
             var jsonRows = JsonSerializer.Deserialize<List<Dictionary<string, string>>>(output);
             if (jsonRows != null)
             {
+                var seenDedupKeys = new HashSet<string>();
                 foreach (var row in jsonRows)
                 {
-                    results.Add(new CollectionRowResult
+                    try
                     {
-                        RawDataJson = JsonSerializer.Serialize(row),
-                        CleanedDataJson = JsonSerializer.Serialize(row),
-                        TargetEntityType = "DistributionRecord",
-                    });
+                        var smartResult = await _smartDataCleaner.CleanAsync(row, transformConfigJson, seenDedupKeys);
+                        results.Add(new CollectionRowResult
+                        {
+                            RawDataJson = JsonSerializer.Serialize(row),
+                            CleanedDataJson = smartResult.CleanedDataJson,
+                            TargetEntityType = smartResult.TargetEntityType ?? "DistributionRecord",
+                            ErrorMessage = smartResult.ErrorMessage,
+                        });
+                    }
+                    catch (Exception ex)
+                    {
+                        results.Add(new CollectionRowResult
+                        {
+                            RawDataJson = JsonSerializer.Serialize(row),
+                            CleanedDataJson = JsonSerializer.Serialize(row),
+                            TargetEntityType = "DistributionRecord",
+                            ErrorMessage = $"清洗失败: {ex.Message}",
+                        });
+                    }
                 }
+
+                var cleanedJsons = results.Select(r => r.CleanedDataJson ?? "{}").ToList();
+                var enrichedJsons = _smartDataCleaner.DetectBatchAnomalies(cleanedJsons, transformConfigJson);
+                for (int i = 0; i < results.Count; i++)
+                    results[i].CleanedDataJson = enrichedJsons[i];
             }
         }
         catch (Exception ex)

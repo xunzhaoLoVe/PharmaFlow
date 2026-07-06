@@ -11,6 +11,8 @@ public class DistributionService : IDistributionService
     private readonly AppDbContext _db;
     public DistributionService(AppDbContext db) => _db = db;
 
+    private record TraceSupplierInfo(string NodeId, string Name, decimal Quantity, DateTime FirstDate);
+
     public async Task<PagedResult<DistributionRecordDto>> GetPagedAsync(int pageIndex, int pageSize, string? drugName = null, string? batchNo = null, Guid? customerId = null, DateTime? from = null, DateTime? to = null, bool? fromSelf = null)
     {
         var selfId = await _db.Customers.Where(c => c.Code == "SELF").Select(c => (Guid?)c.Id).FirstOrDefaultAsync();
@@ -191,86 +193,117 @@ public class DistributionService : IDistributionService
             query = query.Where(r => r.DrugId == drugId);
 
         var records = await query.OrderBy(r => r.DistributionDate).ToListAsync();
-        if (records.Count == 0) return null;
 
-        var drug = records.First().Drug!;
+        var purchaseQuery = _db.PurchaseOrderItems
+            .Include(pi => pi.Drug)
+            .Include(pi => pi.PurchaseOrder).ThenInclude(po => po.Supplier)
+            .Where(pi => pi.PurchaseOrder.Status == OrderStatus.已完成);
+        if (!string.IsNullOrWhiteSpace(batchNo) && batchNo.Length >= 4)
+            purchaseQuery = purchaseQuery.Where(pi => pi.BatchNo.Contains(batchNo));
+        if (drugId != Guid.Empty)
+            purchaseQuery = purchaseQuery.Where(pi => pi.DrugId == drugId);
+
+        var purchaseItems = await purchaseQuery.OrderBy(pi => pi.PurchaseOrder.OrderDate).ToListAsync();
+        var salesQuery = _db.SalesOrderItems
+            .Include(si => si.Drug)
+            .Include(si => si.SalesOrder).ThenInclude(so => so.Customer)
+            .Where(si => si.SalesOrder.Status == OrderStatus.已完成);
+        if (!string.IsNullOrWhiteSpace(batchNo) && batchNo.Length >= 4)
+            salesQuery = salesQuery.Where(si => si.BatchNo.Contains(batchNo));
+        if (drugId != Guid.Empty)
+            salesQuery = salesQuery.Where(si => si.DrugId == drugId);
+
+        var salesItems = await salesQuery.OrderBy(si => si.SalesOrder.OrderDate).ToListAsync();
+        if (records.Count == 0 && purchaseItems.Count == 0 && salesItems.Count == 0) return null;
+
+        var drug = records.FirstOrDefault()?.Drug ?? purchaseItems.FirstOrDefault()?.Drug ?? salesItems.First().Drug;
         var selfId = await _db.Customers.Where(c => c.Code == "SELF").Select(c => (Guid?)c.Id).FirstOrDefaultAsync();
 
-        var batchNos = records.Select(r => r.BatchNo).Distinct().ToList();
-
-        // Get inventory
-        var inventories = await _db.Inventories
-            .Where(i => batchNos.Contains(i.BatchNo))
-            .ToListAsync();
-
-        // ===== 从 DistributionRecord 中提取供应商信息（SupplierId 不为空的记录）=====
-        var supplierRecords = records.Where(r => r.SupplierId.HasValue).ToList();
-        var supplierGroups = supplierRecords
-            .GroupBy(r => new { r.SupplierId!.Value, SupplierName = r.Supplier?.Name ?? "" })
-            .Select(g => new { SupplierId = g.Key.Value.ToString(), SupplierName = g.Key.SupplierName, TotalQuantity = g.Sum(r => r.Quantity), FirstDate = g.Min(r => r.DistributionDate) })
+        var batchNos = records.Select(r => r.BatchNo)
+            .Concat(purchaseItems.Select(pi => pi.BatchNo))
+            .Concat(salesItems.Select(si => si.BatchNo))
+            .Distinct()
             .ToList();
 
-        // ===== 补充查询：从 PurchaseOrderItems 获取未记录在 DistributionRecord 中的采购来源 =====
-        // （兼容旧数据：升级前已完成的采购单没有 DistributionRecord）
-        var batchesFromPurchaseRecords = supplierRecords.Select(r => r.BatchNo).Distinct().ToHashSet();
-        var batchesWithoutPurchaseRecord = batchNos.Where(b => !batchesFromPurchaseRecords.Contains(b)).ToList();
+        var inventories = await _db.Inventories
+            .Where(i => i.DrugId == drug.Id && batchNos.Contains(i.BatchNo))
+            .ToListAsync();
 
-        if (batchesWithoutPurchaseRecord.Count > 0)
-        {
-            var fallbackPurchaseItems = await _db.PurchaseOrderItems
-                .Include(pi => pi.PurchaseOrder).ThenInclude(po => po.Supplier)
-                .Where(pi => batchesWithoutPurchaseRecord.Contains(pi.BatchNo) && pi.PurchaseOrder.Status == OrderStatus.已完成)
-                .ToListAsync();
+        var nodes = new Dictionary<string, FlowNodeDto>();
+        var edges = new Dictionary<string, FlowEdgeDto>();
 
-            var fallbackGroups = fallbackPurchaseItems
+        var supplierGroups = records
+            .Where(r => r.SupplierId.HasValue)
+            .GroupBy(r => new { Id = r.SupplierId!.Value, Name = r.Supplier?.Name ?? "供应商" })
+            .Select(g => new TraceSupplierInfo($"SUP_{g.Key.Id}", g.Key.Name, g.Sum(r => r.Quantity), g.Min(r => r.DistributionDate)))
+            .Concat(purchaseItems
                 .GroupBy(pi => new { pi.PurchaseOrder.SupplierId, pi.PurchaseOrder.Supplier.Name })
-                .Select(g => new { SupplierId = g.Key.SupplierId.ToString(), SupplierName = g.Key.Name, TotalQuantity = (decimal)g.Sum(pi => pi.Quantity), FirstDate = g.Min(pi => pi.PurchaseOrder.OrderDate) })
-                .ToList();
+                .Select(g => new TraceSupplierInfo($"SUP_{g.Key.SupplierId}", g.Key.Name, (decimal)g.Sum(pi => pi.Quantity), g.Min(pi => pi.PurchaseOrder.OrderDate))))
+            .GroupBy(s => s.NodeId)
+            .Select(g => new TraceSupplierInfo(g.Key, g.First().Name, g.Sum(x => x.Quantity), g.Min(x => x.FirstDate)))
+            .OrderBy(s => s.FirstDate)
+            .ToList();
 
-            // 合并，去重
-            var existingSupplierIds = supplierGroups.Select(s => s.SupplierId).ToHashSet();
-            supplierGroups.AddRange(fallbackGroups.Where(f => !existingSupplierIds.Contains(f.SupplierId)));
+        foreach (var supplier in supplierGroups)
+        {
+            nodes[supplier.NodeId] = new FlowNodeDto
+            {
+                Id = supplier.NodeId,
+                Name = supplier.Name,
+                Type = "生产厂家",
+                Tier = 0,
+                Date = supplier.FirstDate,
+                OutQuantity = supplier.Quantity,
+            };
         }
 
-        // ===== 构建节点字典 =====
-        var nodes = new Dictionary<string, FlowNodeDto>();
+        var fallbackSource = supplierGroups.FirstOrDefault();
+        if (fallbackSource == null && (records.Any(r => r.FromCustomerId == selfId || r.ToCustomerId == selfId) || salesItems.Count > 0))
+        {
+            var fallbackDate = records.Select(r => r.DistributionDate)
+                .Concat(salesItems.Select(si => si.SalesOrder.OrderDate))
+                .DefaultIfEmpty(DateTime.UtcNow)
+                .Min();
+            fallbackSource = new TraceSupplierInfo("SELF_SOURCE", "本公司(制药厂)", 0, fallbackDate);
+            nodes[fallbackSource.NodeId] = new FlowNodeDto
+            {
+                Id = fallbackSource.NodeId,
+                Name = fallbackSource.Name,
+                Type = "生产厂家",
+                Tier = 0,
+                Date = fallbackSource.FirstDate,
+            };
+            supplierGroups.Add(fallbackSource);
+        }
+
         var allCustomerIds = new HashSet<Guid>();
         foreach (var r in records)
         {
-            if (r.FromCustomer != null) allCustomerIds.Add(r.FromCustomer.Id);
-            if (r.ToCustomer != null) allCustomerIds.Add(r.ToCustomer.Id);
+            if (r.FromCustomerId.HasValue && r.FromCustomerId != selfId) allCustomerIds.Add(r.FromCustomerId.Value);
+            if (r.ToCustomerId.HasValue && r.ToCustomerId != selfId) allCustomerIds.Add(r.ToCustomerId.Value);
+        }
+        foreach (var si in salesItems)
+        {
+            if (si.SalesOrder.CustomerId != selfId) allCustomerIds.Add(si.SalesOrder.CustomerId);
         }
 
-        // 加载所有涉及客户的完整信息
         var allCustomers = await _db.Customers.Where(c => allCustomerIds.Contains(c.Id)).ToListAsync();
-        var customerMap = allCustomers.ToDictionary(c => c.Id);
-
-        // 为每个唯一客户创建节点
         foreach (var c in allCustomers)
         {
-            if (c.Id == selfId) continue; // SELF不再显示
-            string type = c.CustomerType switch
-            {
-                CustomerType.商业 => c.Level switch
-                {
-                    DistributorLevel.一级经销商 => "一级经销",
-                    DistributorLevel.二级经销商 => "二级经销",
-                    DistributorLevel.三级经销商 => "三级经销",
-                    _ => "经销商"
-                },
-                _ => "终端销售"
-            };
-            var inv = inventories.FirstOrDefault(i => i.CustomerId == c.Id);
+            var nodeRecords = records.Where(r => r.ToCustomerId == c.Id || r.FromCustomerId == c.Id).ToList();
+            var nodeDates = nodeRecords.Select(r => r.DistributionDate)
+                .Concat(salesItems.Where(si => si.SalesOrder.CustomerId == c.Id).Select(si => si.SalesOrder.OrderDate))
+                .ToList();
             nodes[c.Id.ToString()] = new FlowNodeDto
             {
-                Id = c.Id.ToString(), Name = c.Name, Type = type,
-                Province = c.Province, StockQuantity = inv?.Quantity ?? 0,
-                Date = records.Where(r => r.ToCustomerId == c.Id || r.FromCustomerId == c.Id).Min(r => (DateTime?)r.DistributionDate),
+                Id = c.Id.ToString(),
+                Name = c.Name,
+                Type = CustomerTraceType(c),
+                Province = c.Province,
+                StockQuantity = inventories.Where(i => i.CustomerId == c.Id).Sum(i => i.Quantity),
+                Date = nodeDates.Count > 0 ? nodeDates.Min() : null,
             };
         }
-
-        // ===== 构建边字典 =====
-        var edges = new Dictionary<string, FlowEdgeDto>();
 
         foreach (var r in records)
         {
@@ -279,79 +312,79 @@ public class DistributionService : IDistributionService
 
             if (r.SupplierId.HasValue)
             {
-                // 采购记录：供应商 → 本公司(SELF)
                 fromId = $"SUP_{r.SupplierId.Value}";
+                if (!nodes.ContainsKey(fromId))
+                {
+                    nodes[fromId] = new FlowNodeDto
+                    {
+                        Id = fromId,
+                        Name = r.Supplier?.Name ?? "供应商",
+                        Type = "生产厂家",
+                        Tier = 0,
+                        Date = r.DistributionDate,
+                    };
+                }
+                if (!r.ToCustomerId.HasValue || r.ToCustomerId == selfId) continue;
                 toId = r.ToCustomerId?.ToString();
                 fromName = r.Supplier?.Name ?? "";
                 toName = r.ToCustomer?.Name ?? "";
             }
             else
             {
-                // 销售流转记录：FromCustomer → ToCustomer（跳过SELF）
-                if (r.FromCustomerId == selfId || r.ToCustomerId == selfId) continue;
-                fromId = r.FromCustomerId?.ToString();
+                if (!r.ToCustomerId.HasValue || r.ToCustomerId == selfId) continue;
+
+                if (r.FromCustomerId == selfId)
+                {
+                    if (fallbackSource == null) continue;
+                    fromId = fallbackSource.NodeId;
+                    fromName = fallbackSource.Name;
+                }
+                else
+                {
+                    fromId = r.FromCustomerId?.ToString();
+                    fromName = r.FromCustomer?.Name ?? "";
+                }
+
                 toId = r.ToCustomerId?.ToString();
-                fromName = r.FromCustomer?.Name ?? "";
                 toName = r.ToCustomer?.Name ?? "";
             }
 
-            if (fromId == null || toId == null) continue;
+            if (fromId == null || toId == null || !nodes.ContainsKey(fromId) || !nodes.ContainsKey(toId)) continue;
 
-            // 退货不反转方向，靠负数量和虚线标识
-            var dateKey = r.DistributionDate;
-            var edgeKey = $"{fromId}→{toId}|{dateKey}";
-            if (edges.TryGetValue(edgeKey, out var existing))
-                existing.Quantity += r.Quantity; // 负数会累减
-            else
-                edges[edgeKey] = new FlowEdgeDto
-                {
-                    SourceId = fromId, TargetId = toId,
-                    SourceName = fromName, TargetName = toName,
-                    Quantity = r.Quantity, Date = r.DistributionDate,
-                };
+            AddOrMergeTraceEdge(edges, fromId, toId, fromName, toName, r.Quantity, r.DistributionDate);
         }
 
-        // ===== 补充供应商节点（生产厂家）=====
-        foreach (var sg in supplierGroups)
+        var recordedSalesOrderIds = records
+            .Where(r => r.SalesOrderId.HasValue)
+            .Select(r => r.SalesOrderId!.Value)
+            .ToHashSet();
+        foreach (var si in salesItems.Where(si => !recordedSalesOrderIds.Contains(si.SalesOrderId)))
         {
-            var supplierId = $"SUP_{sg.SupplierId}";
-            if (!nodes.ContainsKey(supplierId))
-            {
-                nodes[supplierId] = new FlowNodeDto
-                {
-                    Id = supplierId, Name = sg.SupplierName, Type = "生产厂家",
-                    Tier = 0, Date = sg.FirstDate,
-                };
-            }
+            if (fallbackSource == null || si.SalesOrder.CustomerId == selfId) continue;
+            var toId = si.SalesOrder.CustomerId.ToString();
+            if (!nodes.ContainsKey(toId)) continue;
+            AddOrMergeTraceEdge(edges, fallbackSource.NodeId, toId, fallbackSource.Name, si.SalesOrder.Customer.Name, si.Quantity, si.SalesOrder.OrderDate);
         }
 
-        // ===== BFS 计算各节点 Tier（从生产厂家出发）=====
-        ComputeTiersFromSuppliers(nodes, edges, supplierGroups.Select(s => $"SUP_{s.SupplierId}").ToList());
+        ComputeTraceTiers(nodes, edges);
 
-        // ===== 汇总每个节点的入/出总量 =====
         foreach (var node in nodes.Values)
         {
             node.InQuantity = edges.Values.Where(e => e.TargetId == node.Id).Sum(e => e.Quantity);
             node.OutQuantity = edges.Values.Where(e => e.SourceId == node.Id).Sum(e => e.Quantity);
         }
 
-        // ===== 标记调拨边（仅同级别经销商之间互流，不含流向终端）=====
-        // 用经销商实际Level判定，不用BFS算出的Tier
         foreach (var edge in edges.Values)
         {
             var src = nodes.TryGetValue(edge.SourceId, out var s) ? s : null;
             var tgt = nodes.TryGetValue(edge.TargetId, out var t) ? t : null;
             if (src == null || tgt == null) continue;
 
-            int srcLevel = DealerLevelFromType(src.Type);
-            int tgtLevel = DealerLevelFromType(tgt.Type);
-            edge.IsTransfer = srcLevel > 0 && tgtLevel > 0 && srcLevel == tgtLevel;
+            edge.IsTransfer = IsDealerNode(src) && IsDealerNode(tgt) && src.Tier == tgt.Tier;
         }
 
-        // ===== 检测串货（一级经销商省份与下游不一致）=====
-        DetectChannelConflicts(nodes, edges, supplierGroups.Select(s => $"SUP_{s.SupplierId}").ToList());
+        DetectChannelConflicts(nodes, edges, supplierGroups.Select(s => s.NodeId).ToList());
 
-        // ===== 按 Tier 分组 =====
         var tiers = new SortedDictionary<int, List<FlowNodeDto>>();
         foreach (var node in nodes.Values)
         {
@@ -366,10 +399,107 @@ public class DistributionService : IDistributionService
         {
             DrugName = drug.Name,
             BatchNo = batchNo,
-            SupplierName = supplierGroups.FirstOrDefault()?.SupplierName,
-            PurchaseDate = supplierGroups.FirstOrDefault()?.FirstDate ?? records.Min(r => r.DistributionDate),
+            SupplierName = supplierGroups.FirstOrDefault()?.Name,
+            PurchaseDate = supplierGroups.FirstOrDefault()?.FirstDate ?? records.Select(r => r.DistributionDate).DefaultIfEmpty(DateTime.UtcNow).Min(),
             Nodes = nodes, Edges = edges, Tiers = tiers,
         };
+    }
+
+    private static string CustomerTraceType(Customer c) => c.CustomerType switch
+    {
+        CustomerType.商业 => c.Level switch
+        {
+            DistributorLevel.一级经销商 => "一级经销",
+            DistributorLevel.二级经销商 => "二级经销",
+            DistributorLevel.三级经销商 => "三级经销",
+            _ => "经销商"
+        },
+        _ => "终端销售"
+    };
+
+    private static bool IsDealerNode(FlowNodeDto node)
+        => node.Type is "一级经销" or "二级经销" or "三级经销" or "经销商";
+
+    private static int FixedTierForNode(FlowNodeDto node) => node.Type switch
+    {
+        "生产厂家" or "供应商" or "生产出厂" => 0,
+        "一级经销" => 1,
+        "二级经销" => 2,
+        "三级经销" => 3,
+        _ => int.MaxValue
+    };
+
+    private static void AddOrMergeTraceEdge(
+        Dictionary<string, FlowEdgeDto> edges,
+        string fromId,
+        string toId,
+        string fromName,
+        string toName,
+        decimal quantity,
+        DateTime date)
+    {
+        var edgeKey = $"{fromId}->{toId}";
+        if (edges.TryGetValue(edgeKey, out var existing))
+        {
+            existing.Quantity += quantity;
+            if (!existing.Date.HasValue || date < existing.Date.Value)
+                existing.Date = date;
+            return;
+        }
+
+        edges[edgeKey] = new FlowEdgeDto
+        {
+            SourceId = fromId,
+            TargetId = toId,
+            SourceName = fromName,
+            TargetName = toName,
+            Quantity = quantity,
+            Date = date,
+        };
+    }
+
+    private static void ComputeTraceTiers(
+        Dictionary<string, FlowNodeDto> nodes,
+        Dictionary<string, FlowEdgeDto> edges)
+    {
+        foreach (var node in nodes.Values)
+        {
+            var fixedTier = FixedTierForNode(node);
+            node.Tier = fixedTier == int.MaxValue
+                ? (node.Type == "经销商" ? 1 : 4)
+                : fixedTier;
+        }
+
+        var changed = true;
+        var guard = 0;
+        while (changed && guard++ < nodes.Count + edges.Count + 5)
+        {
+            changed = false;
+            foreach (var edge in edges.Values)
+            {
+                if (!nodes.TryGetValue(edge.SourceId, out var src) || !nodes.TryGetValue(edge.TargetId, out var tgt))
+                    continue;
+
+                if (tgt.Type == "终端销售")
+                {
+                    var desired = Math.Max(4, src.Tier + 1);
+                    if (desired > tgt.Tier)
+                    {
+                        tgt.Tier = desired;
+                        changed = true;
+                    }
+                }
+                else if (tgt.Type == "经销商")
+                {
+                    var desired = Math.Min(3, Math.Max(1, src.Tier + 1));
+                    if (desired > tgt.Tier)
+                    {
+                        tgt.Tier = desired;
+                        changed = true;
+                    }
+                }
+            }
+        }
     }
 
     /// <summary>从节点类型解析经销商级别（1/2/3），非经销商返回0</summary>

@@ -47,8 +47,24 @@ export async function submitTask(id: string): Promise<void> {
   await apiClient.post(`/collection/tasks/${id}/submit`);
 }
 
+export async function unsubmitTask(id: string): Promise<void> {
+  await apiClient.post(`/collection/tasks/${id}/unsubmit`);
+}
+
 export async function clearSummary(): Promise<void> {
   await apiClient.post('/collection/summary/clear');
+}
+
+export interface SyncSummaryResult {
+  totalRecords: number;
+  createdDrugs: number;
+  createdCustomers: number;
+  createdDistributionRecords: number;
+  skippedRecords: number;
+}
+
+export async function syncSummary(sourceId?: string): Promise<SyncSummaryResult> {
+  return getData(await apiClient.post<ApiResponse<SyncSummaryResult>>('/collection/summary/sync', null, { params: { sourceId } }));
 }
 
 export async function updateToken(sourceId: string, token: string, cookieName?: string): Promise<void> {
@@ -57,6 +73,17 @@ export async function updateToken(sourceId: string, token: string, cookieName?: 
 
 export async function setAutoSubmit(sourceId: string, autoSubmit: boolean): Promise<void> {
   await apiClient.post(`/collection/sources/${sourceId}/autosubmit`, { autoSubmit });
+}
+
+export interface ReapplyTransformResult {
+  sourceId: string;
+  totalRecords: number;
+  updatedRecords: number;
+  errorRecords: number;
+}
+
+export async function reapplyTransform(sourceId: string): Promise<ReapplyTransformResult> {
+  return getData(await apiClient.post<ApiResponse<ReapplyTransformResult>>(`/collection/sources/${sourceId}/reapply-transform`));
 }
 
 export async function triggerCollection(sourceId: string): Promise<CollectionTaskDto> {

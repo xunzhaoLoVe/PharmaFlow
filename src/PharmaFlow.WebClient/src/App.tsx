@@ -14,8 +14,6 @@ import ConflictPage from './pages/distribution/ConflictPage';
 import ReportPage from './pages/reports/ReportPage';
 import UserListPage from './pages/users/UserListPage';
 import CollectionPage from './pages/datacollection/CollectionPage';
-import ReviewPage from './pages/datacollection/ReviewPage';
-import ImportRulePage from './pages/importrules/ImportRulePage';
 
 function PrivateRoute({ children }: { children: React.ReactNode }) {
   const token = localStorage.getItem('token');
@@ -70,8 +68,6 @@ export default function App() {
             <Route path="reports" element={<ReportPage />} />
             <Route path="users" element={<UserListPage />} />
             <Route path="datacollection" element={<CollectionPage />} />
-            <Route path="datacollection/review" element={<ReviewPage />} />
-            <Route path="importrules" element={<ImportRulePage />} />
           </Route>
         </Routes>
       </BrowserRouter>
