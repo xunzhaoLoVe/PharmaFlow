@@ -1,6 +1,7 @@
 *_token.txt
 *_cookies.json
 *_captcha.*
+*_captcha*.*
 *_debug*.py
 *_test*.py
 *_test*.json
@@ -15,5 +16,7 @@ page.html
 *.html
 !index.html
 gwt_payload_test.bin
+gwt_payload*.bin
+*_gray.png
 gwt_login.js
 *_response.txt

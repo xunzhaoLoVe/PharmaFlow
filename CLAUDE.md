@@ -214,6 +214,19 @@ const data = (res as any).data || [];
 { "loginPath": "/login", "username": "user", "password": "pass",
   "extraFields": { "rememberMe": "true" } }
 
+// JSON登录并从响应提取Token（如国药控股江西 PSI）
+{ "loginPath": "/prod-api/login", "loginMethod": "POST",
+  "loginHeaders": { "Origin": "http://...", "Referer": "http://.../login", "isToken": "false" },
+  "preLogin": { "url": "/prod-api/captchaImage", "extract": [
+    { "name": "uuid", "type": "json", "path": "uuid", "required": true },
+    { "name": "code", "type": "mathCaptcha", "path": "img", "required": true } ] },
+  "passwordEncrypt": { "type": "rsa", "name": "password", "value": "...", "publicKey": "MIIB..." },
+  "loginBodyJson": "{\"username\":\"...\",\"password\":\"{{password}}\",\"code\":\"{{code}}\",\"uuid\":\"{{uuid}}\"}",
+  "tokenExtract": { "source": "json", "paths": ["token", "data.token", "access_token"], "required": true,
+    "targets": [ { "type": "header", "name": "Authorization", "prefix": "Bearer " },
+                 { "type": "cookie", "name": "Psi-Syn-Token" } ] },
+  "headers": { "Origin": "http://...", "Referer": "http://.../psisyn/psisale" } }
+
 // ExportConfig — 导出配置（JSON POST / Form POST / GET，JSON/HTML/Excel 解析）
 { "export": { "url": "...", "method": "POST", "content_type": "application/json", "dataFormat": "json" },
   "body_template": { "db": "db", "params": { "startDate": "{{dayBeforeYesterday}}", "endDate": "{{yesterday}}" } } }

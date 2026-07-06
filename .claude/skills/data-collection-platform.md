@@ -55,7 +55,41 @@ PharmaFlow 数据采集模块的完整配置指南。当用户需要新增一个
   "extraFields": { "rememberMe": "true" }
 }
 
-// 方式3: 无认证
+// 方式3: JSON登录并从响应提取Token（如国药控股江西 PSI）
+{
+  "loginPath": "/prod-api/login",
+  "loginMethod": "POST",
+  "loginHeaders": {
+    "Accept": "application/json, text/plain, */*",
+    "Origin": "http://111.74.9.154:8097",
+    "Referer": "http://111.74.9.154:8097/login?redirect=%2Findex",
+    "isToken": "false"
+  },
+  "preLogin": {
+    "url": "/prod-api/captchaImage",
+    "extract": [
+      { "name": "uuid", "type": "json", "path": "uuid", "required": true },
+      { "name": "code", "type": "json", "path": "code" }
+    ]
+  },
+  "loginBodyJson": "{\"username\":\"...\",\"password\":\"...\",\"code\":\"{{code}}\",\"uuid\":\"{{uuid}}\"}",
+  "tokenExtract": {
+    "source": "json",
+    "paths": ["token", "data.token", "access_token", "data.access_token"],
+    "required": true,
+    "targets": [
+      { "type": "header", "name": "Authorization", "prefix": "Bearer " },
+      { "type": "cookie", "name": "Psi-Syn-Token" }
+    ]
+  },
+  "headers": {
+    "Accept": "application/json, text/plain, */*",
+    "Origin": "http://111.74.9.154:8097",
+    "Referer": "http://111.74.9.154:8097/psisyn/psisale"
+  }
+}
+
+// 方式4: 无认证
 {}
 ```
 

@@ -1,0 +1,10 @@
+UPDATE "CollectionSources" SET "ExportConfig" = '{"export": {"pythonScript": "/app/scripts/qingdao_scraper.py", "dataFormat": "json"}}' WHERE "Id" = '0E574A38-80B2-4830-814D-4C5BB59E8470';
+UPDATE "CollectionSources" SET "ExportConfig" = '{"export": {"pythonScript": "/app/scripts/ruihua_scraper.py", "dataFormat": "json"}}' WHERE "Id" = '914D4744-6DB7-4064-8627-091711B20B93';
+UPDATE "CollectionSources" SET "ExportConfig" = '{"export": {"pythonScript": "/app/scripts/yingte_scraper.py", "dataFormat": "json"}}' WHERE "Id" = 'AB1631A9-1C04-4035-B832-0A099232C6ED';
+UPDATE "CollectionSources" SET "ExportConfig" = '{"export": {"pythonScript": "/app/scripts/ssrs_scraper.py", "dataFormat": "json"}}' WHERE "Id" = 'D40B4954-6025-4538-B00D-38E1CBBBF4BE';
+UPDATE "CollectionSources" SET "ExportConfig" = '{"export": {"pythonScript": "/app/scripts/tzsj_scraper.py", "dataFormat": "json"}}' WHERE "Id" = '75E02212-2E7B-46CA-82CB-DB2D0F2E0F85';
+UPDATE "CollectionSources" SET "ExportConfig" = '{"export": {"pythonScript": "/app/scripts/salesapi_scraper.py", "dataFormat": "json"}}' WHERE "Id" = 'DE8FFDC2-6A86-4704-907B-B07E5522C3DC';
+UPDATE "CollectionSources" SET "ExportConfig" = '{"export": {"pythonScript": "/app/scripts/rfxt_scraper.py", "dataFormat": "json"}}' WHERE "Id" = '68BB0A6D-F903-4E3C-9767-BC606749BA04';
+UPDATE "CollectionSources" SET "ExportConfig" = '{"export": {"pythonScript": "/app/scripts/lgyy_scraper.py", "dataFormat": "json"}}' WHERE "Id" = '19614277-6A82-46EE-B03A-C80A239C54E7';
+UPDATE "CollectionSources" SET "ExportConfig" = '{"export": {"pythonScript": "/app/scripts/gknn_scraper.py", "dataFormat": "json"}}' WHERE "Id" = 'C562FA6B-F2A5-4EA4-BD5B-19CE374B8927';
+UPDATE "CollectionSources" SET "ExportConfig" = '{"export": {"pythonScript": "/app/scripts/gwt_scraper.py", "dataFormat": "json"}}' WHERE "Id" = '2CBB9A24-C110-4FFF-BBDC-7CDEEBE39BC4';

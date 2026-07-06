@@ -1,4 +1,5 @@
 using System.Net;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
@@ -61,89 +62,36 @@ public class CollectionExecutionService
         // 解析导出配置
         var exportConfig = ParseExportConfig(exportConfigJson);
 
-        // 构建请求 headers
-        var requestHeaders = new Dictionary<string, string>();
+        // 构建导出请求 headers
+        var requestHeaders = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         if (authConfig?.Headers != null)
             foreach (var h in authConfig.Headers) requestHeaders[h.Key] = h.Value;
 
-        // 处理登录
-        var hasLogin = authConfig != null && !string.IsNullOrWhiteSpace(authConfig.LoginPath);
-        if (authConfig != null)
-            _logger.LogInformation("登录配置: Path={P}, CaptchaUrl={C}, LoginPageUrl={L}, BodyJson={B}",
-                authConfig.LoginPath, authConfig.CaptchaUrl ?? "null", authConfig.LoginPageUrl ?? "null",
-                authConfig.LoginBodyJson != null ? "有" : "null");
         using var handler = new HttpClientHandler { UseCookies = false, AllowAutoRedirect = false };
         using var httpClient = new HttpClient(handler) { BaseAddress = new Uri(baseUrl), Timeout = TimeSpan.FromMinutes(3) };
 
-        string? sessionCookie = null;
-
-        // 执行登录
-        if (hasLogin)
+        // 执行登录：支持 Set-Cookie 捕获 + JSON 响应 token 提取
+        if (authConfig != null && !string.IsNullOrWhiteSpace(authConfig.LoginPath))
         {
-            try
-            {
-                HttpContent? loginContent = null;
-
-                // 验证码登录：先获取页面→获取验证码→OCR→提交
-                if (!string.IsNullOrWhiteSpace(authConfig!.CaptchaUrl) && !string.IsNullOrWhiteSpace(authConfig.LoginPageUrl))
-                {
-                    sessionCookie = await CaptchaLoginAsync(httpClient, authConfig, cancellationToken);
-                }
-                else if (!string.IsNullOrWhiteSpace(authConfig!.LoginBodyJson))
-                {
-                    loginContent = new StringContent(authConfig.LoginBodyJson, Encoding.UTF8, "application/json");
-                }
-                else
-                {
-                    var loginDict = new Dictionary<string, string>();
-                    if (!string.IsNullOrWhiteSpace(authConfig.Username)) loginDict["username"] = authConfig.Username;
-                    if (!string.IsNullOrWhiteSpace(authConfig.Password)) loginDict["password"] = authConfig.Password;
-                    if (authConfig.ExtraFields != null)
-                        foreach (var kvp in authConfig.ExtraFields) loginDict[kvp.Key] = kvp.Value;
-                    loginContent = new FormUrlEncodedContent(loginDict);
-                }
-
-                if (sessionCookie == null && loginContent != null)
-                {
-                    var loginUrl = authConfig.LoginPath!.StartsWith('/') ? authConfig.LoginPath : "/" + authConfig.LoginPath;
-                    var loginResp = await httpClient.PostAsync(loginUrl, loginContent, cancellationToken);
-                    var loginBody = await loginResp.Content.ReadAsStringAsync();
-                    _logger.LogInformation("登录 {Url} 返回 {Status}, Body: {Body}", loginUrl, loginResp.StatusCode, loginBody?.Length > 200 ? loginBody[..200] : loginBody);
-
-                    if (loginResp.Headers.TryGetValues("Set-Cookie", out var cookies))
-                    {
-                        var parts = new List<string>();
-                        foreach (var c in cookies)
-                        {
-                            var segs = c.Split(';');
-                            if (segs.Length > 0 && segs[0].Contains('='))
-                            {
-                                var kv = segs[0].Trim().Split('=', 2);
-                                if (kv.Length == 2) parts.Add($"{kv[0]}={kv[1]}");
-                            }
-                        }
-                        if (parts.Count > 0) { sessionCookie = string.Join("; ", parts); _logger.LogInformation("捕获Cookie: {C}", sessionCookie); }
-                    }
-                }
-            }
-            catch (Exception ex) { _logger.LogWarning(ex, "登录失败: {Message}", ex.Message); }
+            var loginResult = await ExecuteLoginAsync(httpClient, authConfig, cancellationToken);
+            if (!string.IsNullOrWhiteSpace(loginResult.Cookies))
+                requestHeaders["Cookie"] = MergeCookies(GetHeaderValue(requestHeaders, "Cookie"), loginResult.Cookies)!;
+            if (!string.IsNullOrWhiteSpace(loginResult.ExtractedToken))
+                ApplyTokenTargets(requestHeaders, loginResult.ExtractedToken!, authConfig.TokenExtract?.Targets);
         }
 
-        // 将登录捕获的 session cookie 加入请求头
-        if (sessionCookie != null)
-            requestHeaders["Cookie"] = sessionCookie;
-
-        // 认证：Cookie Token 或 Header Token
+        // 认证：兼容旧配置的静态 Cookie Token 或 Header Token
         if (authConfig?.Token != null && !string.IsNullOrWhiteSpace(authConfig.Token.CookieName)
             && !string.IsNullOrWhiteSpace(authConfig.Token.Value))
         {
-            requestHeaders["Cookie"] = $"{authConfig.Token.CookieName}={authConfig.Token.Value}";
+            var tokenCookie = $"{authConfig.Token.CookieName}={authConfig.Token.Value}";
+            requestHeaders["Cookie"] = MergeCookies(GetHeaderValue(requestHeaders, "Cookie"), tokenCookie)!;
             _logger.LogInformation("已设置 Cookie: {Name}", authConfig.Token.CookieName);
         }
         else if (authConfig?.Token != null && !string.IsNullOrWhiteSpace(authConfig.Token.HeaderName)
             && !string.IsNullOrWhiteSpace(authConfig.Token.Value))
         {
-            requestHeaders[authConfig.Token.HeaderName] = (authConfig.Token.TokenPrefix ?? "") + authConfig.Token.Value;
+            requestHeaders[authConfig.Token.HeaderName] = BuildTokenValue(authConfig.Token.Value, authConfig.Token.TokenPrefix);
             _logger.LogInformation("已设置 Header: {Name}", authConfig.Token.HeaderName);
         }
 
@@ -262,8 +210,8 @@ public class CollectionExecutionService
         var dataFormat = (cfg.DataFormat ?? "json").ToLower();
         var contentType = cfg.ContentType ?? "application/x-www-form-urlencoded";
 
-        // Excel / HTML 单次请求
-        if (dataFormat is "excel" or "xlsx" or "xls" or "html")
+        // Excel / HTML / BusinessData 单次请求
+        if (dataFormat is "excel" or "xlsx" or "xls" or "html" or "businessdata")
         {
             var bytes = await DoExportAsync(httpClient, cfg, null, requestHeaders, ct);
             if (dataFormat == "html")
@@ -276,8 +224,12 @@ public class CollectionExecutionService
                     : Encoding.UTF8;
                 return ParseHtmlResponse(enc.GetString(bytes), cfg.TableSelector, cfg.RowSelector);
             }
-            else
-                return ParseExcelResponse(bytes);
+            if (dataFormat == "businessdata")
+            {
+                var enc = !string.IsNullOrWhiteSpace(cfg.Encoding) ? Encoding.GetEncoding(cfg.Encoding) : Encoding.UTF8;
+                return ApplyFieldMap(ParseBusinessDataResponse(enc.GetString(bytes), cfg.BusinessDataColumns, cfg.BusinessDataColumnMap), cfg.FieldMap);
+            }
+            return ApplyFieldMap(ParseExcelResponse(bytes), cfg.FieldMap);
         }
 
         // JSON 分页请求
@@ -291,6 +243,7 @@ public class CollectionExecutionService
             var bytes = await DoExportAsync(httpClient, cfg, offset, requestHeaders, ct);
             var json = Encoding.UTF8.GetString(bytes);
             var (rows, totalCount) = ParseJsonResponse(json, dataPath);
+            rows = ApplyFieldMap(rows, cfg.FieldMap);
 
             if (totalCount > 0) total = totalCount;
             allRows.AddRange(rows);
@@ -450,6 +403,8 @@ public class CollectionExecutionService
             throw new InvalidOperationException($"导出失败: HTTP {(int)resp.StatusCode}. {errBody}");
         }
 
+        ThrowIfAuthFailureResponse(respCt, bytes);
+
         return bytes;
     }
 
@@ -469,6 +424,7 @@ public class CollectionExecutionService
                          .Replace("{{dayBeforeYesterday}}", now.AddDays(-2).ToString("yyyy-MM-dd"))
                          .Replace("{{7daysAgo}}", now.AddDays(-7).ToString("yyyy-MM-dd"))
                          .Replace("{{15daysAgo}}", now.AddDays(-15).ToString("yyyy-MM-dd"));
+                val = ReplaceMonthVars(val, now);
                 obj[key] = JsonSerializer.SerializeToElement(val);
             }
             else if (obj[key].ValueKind == JsonValueKind.Object)
@@ -482,7 +438,10 @@ public class CollectionExecutionService
                 foreach (var el in obj[key].EnumerateArray())
                 {
                     if (el.ValueKind == JsonValueKind.String)
-                        arrList.Add(JsonSerializer.SerializeToElement(el.GetString()!.Replace("{{startDate}}", now.AddDays(-30).ToString("yyyy-MM-dd")).Replace("{{endDate}}", now.AddDays(-1).ToString("yyyy-MM-dd")).Replace("{{today}}", now.ToString("yyyy-MM-dd")).Replace("{{yesterday}}", now.AddDays(-1).ToString("yyyy-MM-dd")).Replace("{{dayBeforeYesterday}}", now.AddDays(-2).ToString("yyyy-MM-dd")).Replace("{{7daysAgo}}", now.AddDays(-7).ToString("yyyy-MM-dd")).Replace("{{15daysAgo}}", now.AddDays(-15).ToString("yyyy-MM-dd"))));
+                    {
+                        var arrVal = el.GetString()!.Replace("{{startDate}}", now.AddDays(-30).ToString("yyyy-MM-dd")).Replace("{{endDate}}", now.AddDays(-1).ToString("yyyy-MM-dd")).Replace("{{today}}", now.ToString("yyyy-MM-dd")).Replace("{{yesterday}}", now.AddDays(-1).ToString("yyyy-MM-dd")).Replace("{{dayBeforeYesterday}}", now.AddDays(-2).ToString("yyyy-MM-dd")).Replace("{{7daysAgo}}", now.AddDays(-7).ToString("yyyy-MM-dd")).Replace("{{15daysAgo}}", now.AddDays(-15).ToString("yyyy-MM-dd"));
+                        arrList.Add(JsonSerializer.SerializeToElement(ReplaceMonthVars(arrVal, now)));
+                    }
                     else if (el.ValueKind == JsonValueKind.Object)
                     {
                         var nested = JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(el.GetRawText());
@@ -502,21 +461,47 @@ public class CollectionExecutionService
         var resolved = new Dictionary<string, string>();
         foreach (var kvp in template)
         {
-            resolved[kvp.Key] = kvp.Value
+            var value = kvp.Value
                 .Replace("{{startDate}}", now.AddDays(-30).ToString("yyyy-MM-dd"))
                 .Replace("{{endDate}}", now.AddDays(-1).ToString("yyyy-MM-dd"))
                 .Replace("{{today}}", now.ToString("yyyy-MM-dd"))
                 .Replace("{{yesterday}}", now.AddDays(-1).ToString("yyyy-MM-dd"))
                 .Replace("{{dayBeforeYesterday}}", now.AddDays(-2).ToString("yyyy-MM-dd"))
-            .Replace("{{7daysAgo}}", now.AddDays(-7).ToString("yyyy-MM-dd"))
-            .Replace("{{15daysAgo}}", now.AddDays(-15).ToString("yyyy-MM-dd"));
+                .Replace("{{7daysAgo}}", now.AddDays(-7).ToString("yyyy-MM-dd"))
+                .Replace("{{15daysAgo}}", now.AddDays(-15).ToString("yyyy-MM-dd"));
+            resolved[kvp.Key] = ReplaceMonthVars(value, now);
         }
         return resolved;
+    }
+
+    private static string ReplaceMonthVars(string value, DateTime now)
+    {
+        var firstThisMonth = new DateTime(now.Year, now.Month, 1);
+        var firstLastMonth = firstThisMonth.AddMonths(-1);
+        var lastLastMonth = firstThisMonth.AddDays(-1);
+        return value
+            .Replace("{{lastMonthStart}}", firstLastMonth.ToString("yyyy-MM-dd"))
+            .Replace("{{lastMonthEnd}}", lastLastMonth.ToString("yyyy-MM-dd"))
+            .Replace("{{thisMonthStart}}", firstThisMonth.ToString("yyyy-MM-dd"));
     }
 
     // ═══════════════════════════════════════════
     // 3. 解析
     // ═══════════════════════════════════════════
+
+    private static List<Dictionary<string, string>> ApplyFieldMap(List<Dictionary<string, string>> rows, Dictionary<string, string>? fieldMap)
+    {
+        if (fieldMap == null || fieldMap.Count == 0) return rows;
+        var mappedRows = new List<Dictionary<string, string>>();
+        foreach (var row in rows)
+        {
+            var mapped = new Dictionary<string, string>();
+            foreach (var kvp in fieldMap)
+                mapped[kvp.Value] = row.TryGetValue(kvp.Key, out var value) ? value : "";
+            mappedRows.Add(mapped);
+        }
+        return mappedRows;
+    }
 
     private static (List<Dictionary<string, string>> rows, int total) ParseJsonResponse(
         string json, string? dataPath)
@@ -566,7 +551,11 @@ public class CollectionExecutionService
             {
                 foreach (var segment in dataPath.Split('.'))
                 {
-                    if (current.TryGetProperty(segment, out var next)) current = next;
+                    if (current.ValueKind == JsonValueKind.Array && int.TryParse(segment, out var index))
+                    {
+                        current = index >= 0 && index < current.GetArrayLength() ? current[index] : current;
+                    }
+                    else if (current.ValueKind == JsonValueKind.Object && current.TryGetProperty(segment, out var next)) current = next;
                     else break;
                 }
             }
@@ -607,6 +596,77 @@ public class CollectionExecutionService
         }
         catch (Exception) { }
         return (rows, total);
+    }
+
+    private static List<Dictionary<string, string>> ParseBusinessDataResponse(string text, List<string>? columns, Dictionary<string, int>? columnMap)
+    {
+        var rows = new List<Dictionary<string, string>>();
+        try
+        {
+            // 南华接口返回形如: ({text:'BusinessData[\"BC_bill_sale_dtl\"]=[[...]];\n...',status:1})
+            var wrapper = Regex.Match(text, @"\(\{text:'(?<text>.*)',status:\d+\}\)", RegexOptions.Singleline);
+            if (wrapper.Success)
+                text = UnescapeJsString(wrapper.Groups["text"].Value);
+
+            var match = Regex.Match(text, "BusinessData\\[\"[^\"]+\"\\]\\s*=\\s*(\\[.*?\\])\\s*;", RegexOptions.Singleline);
+            if (!match.Success) return rows;
+            using var doc = JsonDocument.Parse(match.Groups[1].Value);
+            if (doc.RootElement.ValueKind != JsonValueKind.Array) return rows;
+            foreach (var item in doc.RootElement.EnumerateArray())
+            {
+                var dict = new Dictionary<string, string>();
+                if (item.ValueKind == JsonValueKind.Object)
+                {
+                    foreach (var prop in item.EnumerateObject())
+                        dict[prop.Name] = JsonElementToString(prop.Value);
+                }
+                else if (item.ValueKind == JsonValueKind.Array)
+                {
+                    var cells = item.EnumerateArray().Select(JsonElementToString).ToList();
+                    if (columnMap != null && columnMap.Count > 0)
+                    {
+                        foreach (var kvp in columnMap)
+                            if (kvp.Value >= 0 && kvp.Value < cells.Count) dict[kvp.Key] = cells[kvp.Value];
+                    }
+                    else
+                    {
+                        for (var idx = 0; idx < cells.Count; idx++)
+                        {
+                            var hasConfiguredColumns = columns != null && idx < columns.Count;
+                            var key = hasConfiguredColumns ? columns![idx] : $"Col{idx}";
+                            if (hasConfiguredColumns && string.IsNullOrWhiteSpace(key)) continue;
+                            dict[key] = cells[idx];
+                        }
+                    }
+                }
+                if (dict.Count > 0) rows.Add(dict);
+            }
+        }
+        catch { }
+        return rows;
+    }
+
+    private static string UnescapeJsString(string value)
+    {
+        return value.Replace("\\\\", "\\")
+            .Replace("\\'", "'")
+            .Replace("\\\"", "\"")
+            .Replace("\\r", "\r")
+            .Replace("\\n", "\n")
+            .Replace("\\t", "\t");
+    }
+
+    private static string JsonElementToString(JsonElement element)
+    {
+        return element.ValueKind switch
+        {
+            JsonValueKind.String => element.GetString() ?? "",
+            JsonValueKind.Number => element.GetRawText(),
+            JsonValueKind.True => "true",
+            JsonValueKind.False => "false",
+            JsonValueKind.Null => "",
+            _ => element.ToString()
+        };
     }
 
     private List<Dictionary<string, string>> ParseExcelResponse(byte[] data)
@@ -725,6 +785,9 @@ public class CollectionExecutionService
                 ViewStatePageUrl = GetString(exportEl, "viewStatePageUrl"),
                 PythonScript = GetString(exportEl, "pythonScript"),
                 QueryParams = ParseParams(exportEl),
+                BusinessDataColumns = ParseStringArray(exportEl, "columns"),
+                BusinessDataColumnMap = ParseIntMap(exportEl, "columnMap"),
+                FieldMap = ParseStringMap(exportEl, "fieldMap"),
             };
 
             // 解析 body_template（优先从外层，再从 export 内层）
@@ -757,6 +820,36 @@ public class CollectionExecutionService
         catch { return null; }
     }
 
+    private static List<string>? ParseStringArray(JsonElement el, string name)
+    {
+        if (!el.TryGetProperty(name, out var arr) || arr.ValueKind != JsonValueKind.Array) return null;
+        var values = new List<string>();
+        foreach (var item in arr.EnumerateArray())
+            values.Add(item.ValueKind == JsonValueKind.String ? item.GetString() ?? "" : item.ToString());
+        return values.Count > 0 ? values : null;
+    }
+
+    private static Dictionary<string, string>? ParseStringMap(JsonElement el, string name)
+    {
+        if (!el.TryGetProperty(name, out var obj) || obj.ValueKind != JsonValueKind.Object) return null;
+        var map = new Dictionary<string, string>();
+        foreach (var prop in obj.EnumerateObject())
+            map[prop.Name] = prop.Value.ValueKind == JsonValueKind.String ? prop.Value.GetString() ?? "" : prop.Value.ToString();
+        return map.Count > 0 ? map : null;
+    }
+
+    private static Dictionary<string, int>? ParseIntMap(JsonElement el, string name)
+    {
+        if (!el.TryGetProperty(name, out var obj) || obj.ValueKind != JsonValueKind.Object) return null;
+        var map = new Dictionary<string, int>();
+        foreach (var prop in obj.EnumerateObject())
+        {
+            if (prop.Value.ValueKind == JsonValueKind.Number && prop.Value.TryGetInt32(out var i)) map[prop.Name] = i;
+            else if (prop.Value.ValueKind == JsonValueKind.String && int.TryParse(prop.Value.GetString(), out i)) map[prop.Name] = i;
+        }
+        return map.Count > 0 ? map : null;
+    }
+
     private static Dictionary<string, string>? ParseParams(JsonElement el)
     {
         if (!el.TryGetProperty("params", out var paramsEl)) return null;
@@ -778,6 +871,475 @@ public class CollectionExecutionService
             if (string.Equals(prop.Name, name, StringComparison.OrdinalIgnoreCase))
                 return prop.Value.ValueKind == JsonValueKind.String ? prop.Value.GetString() : null;
         return null;
+    }
+
+    // ═══════════════════════════════════════════
+    // 登录与授权辅助
+    // ═══════════════════════════════════════════
+
+    private async Task<LoginResult> ExecuteLoginAsync(HttpClient httpClient, AuthConfig authConfig, CancellationToken ct)
+    {
+        _logger.LogInformation("登录配置: Path={P}, CaptchaUrl={C}, LoginPageUrl={L}, BodyJson={B}, TokenExtract={T}",
+            authConfig.LoginPath, authConfig.CaptchaUrl ?? "null", authConfig.LoginPageUrl ?? "null",
+            authConfig.LoginBodyJson != null ? "有" : "null", authConfig.TokenExtract != null ? "有" : "null");
+
+        if (!string.IsNullOrWhiteSpace(authConfig.CaptchaUrl) && !string.IsNullOrWhiteSpace(authConfig.LoginPageUrl))
+        {
+            var captchaCookies = await CaptchaLoginAsync(httpClient, authConfig, ct);
+            return new LoginResult { Cookies = captchaCookies };
+        }
+
+        var loginUrl = authConfig.LoginPath!.StartsWith('/') ? authConfig.LoginPath : "/" + authConfig.LoginPath;
+        var method = (authConfig.LoginMethod ?? "POST").ToUpperInvariant();
+        var maxAttempts = Math.Max(1, authConfig.LoginRetries ?? 3);
+
+        for (var attempt = 1; attempt <= maxAttempts; attempt++)
+        {
+            var loginVars = authConfig.PreLogin != null
+                ? await ExecutePreLoginAsync(httpClient, authConfig.PreLogin, ct)
+                : new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            ApplyPasswordEncrypt(authConfig, loginVars);
+            var finalLoginUrl = AppendQueryParams(loginUrl, ResolveTemplateParams(authConfig.LoginParams, loginVars));
+
+            using var req = new HttpRequestMessage(method == "GET" ? HttpMethod.Get : HttpMethod.Post, finalLoginUrl);
+            if (method != "GET")
+            {
+                if (!string.IsNullOrWhiteSpace(authConfig.LoginBodyJson))
+                {
+                    var bodyJson = ReplaceTemplateVars(authConfig.LoginBodyJson, loginVars);
+                    var loginContentType = string.IsNullOrWhiteSpace(authConfig.LoginContentType) ? "application/json" : authConfig.LoginContentType!;
+                    req.Content = new StringContent(bodyJson, Encoding.UTF8, loginContentType);
+                }
+                else
+                {
+                    var loginDict = new Dictionary<string, string>();
+                    if (!string.IsNullOrWhiteSpace(authConfig.Username)) loginDict["username"] = ReplaceTemplateVars(authConfig.Username, loginVars);
+                    if (!string.IsNullOrWhiteSpace(authConfig.Password)) loginDict["password"] = ReplaceTemplateVars(authConfig.Password, loginVars);
+                    if (authConfig.ExtraFields != null)
+                        foreach (var kvp in authConfig.ExtraFields) loginDict[kvp.Key] = ReplaceTemplateVars(kvp.Value, loginVars);
+                    req.Content = new FormUrlEncodedContent(loginDict);
+                }
+            }
+
+            ApplyRequestHeaders(req, authConfig.LoginHeaders);
+            if (loginVars.TryGetValue("cookies", out var preLoginCookies) && !string.IsNullOrWhiteSpace(preLoginCookies))
+                req.Headers.TryAddWithoutValidation("Cookie", preLoginCookies);
+            var resp = await httpClient.SendAsync(req, ct);
+            var bytes = await resp.Content.ReadAsByteArrayAsync(ct);
+            var body = Encoding.UTF8.GetString(bytes);
+            var cookies = MergeCookies(loginVars.TryGetValue("cookies", out var preLoginCookiesForResult) ? preLoginCookiesForResult : null, ExtractCookies(resp));
+
+            _logger.LogInformation("登录 {Url} 第{Attempt}/{Max}次返回 {Status}, BodyBytes={BodyBytes}, Cookie={HasCookie}",
+                loginUrl, attempt, maxAttempts, resp.StatusCode, bytes.Length, string.IsNullOrWhiteSpace(cookies) ? "无" : "有");
+
+            if (!resp.IsSuccessStatusCode && resp.StatusCode != HttpStatusCode.Redirect)
+                throw new InvalidOperationException($"Token已过期或未授权: 登录失败 HTTP {(int)resp.StatusCode}");
+
+            if (resp.StatusCode != HttpStatusCode.Redirect)
+                ThrowIfAuthFailureResponse(resp.Content.Headers.ContentType?.MediaType ?? "", bytes);
+
+            var token = ExtractToken(body, authConfig.TokenExtract);
+            if (!string.IsNullOrWhiteSpace(token))
+            {
+                _logger.LogInformation("登录响应已提取Token: {Token}", MaskToken(token));
+                return new LoginResult { Cookies = cookies, Body = body, ExtractedToken = token };
+            }
+
+            if (authConfig.TokenExtract?.Required != true)
+                return new LoginResult { Cookies = cookies, Body = body };
+
+            if (attempt < maxAttempts)
+                _logger.LogWarning("登录成功但未提取到Token，准备重试验证码登录");
+        }
+
+        throw new InvalidOperationException("Token已过期或未授权: 登录成功但未提取到Token");
+    }
+
+    private async Task<Dictionary<string, string>> ExecutePreLoginAsync(HttpClient httpClient, PreLoginConfig cfg, CancellationToken ct)
+    {
+        var vars = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        if (string.IsNullOrWhiteSpace(cfg.Url)) return vars;
+
+        var url = cfg.Url.StartsWith('/') ? cfg.Url : "/" + cfg.Url;
+        using var req = new HttpRequestMessage(HttpMethod.Get, url);
+        ApplyRequestHeaders(req, cfg.Headers);
+        var resp = await httpClient.SendAsync(req, ct);
+        var bytes = await resp.Content.ReadAsByteArrayAsync(ct);
+        var body = Encoding.UTF8.GetString(bytes);
+        var cookies = ExtractCookies(resp);
+        if (!string.IsNullOrWhiteSpace(cookies)) vars["cookies"] = cookies!;
+
+        _logger.LogInformation("预登录 {Url} 返回 {Status}, {Size} bytes", url, resp.StatusCode, bytes.Length);
+        if (!resp.IsSuccessStatusCode)
+            throw new InvalidOperationException($"Token已过期或未授权: 预登录失败 HTTP {(int)resp.StatusCode}");
+
+        if (cfg.IncludeViewState)
+        {
+            AddRegexVar(vars, "__VIEWSTATE", body, "id=\\\"__VIEWSTATE\\\"[^>]*value=\\\"([^\\\"]*)\\\"|name=\\\"__VIEWSTATE\\\"[^>]*value=\\\"([^\\\"]*)\\\"");
+            AddRegexVar(vars, "__VIEWSTATEGENERATOR", body, "id=\\\"__VIEWSTATEGENERATOR\\\"[^>]*value=\\\"([^\\\"]*)\\\"|name=\\\"__VIEWSTATEGENERATOR\\\"[^>]*value=\\\"([^\\\"]*)\\\"");
+            AddRegexVar(vars, "__EVENTVALIDATION", body, "id=\\\"__EVENTVALIDATION\\\"[^>]*value=\\\"([^\\\"]*)\\\"|name=\\\"__EVENTVALIDATION\\\"[^>]*value=\\\"([^\\\"]*)\\\"");
+        }
+
+        if (cfg.Extract != null)
+        {
+            foreach (var item in cfg.Extract)
+            {
+                if (string.IsNullOrWhiteSpace(item.Name)) continue;
+                string? value = null;
+                if (string.Equals(item.Type, "json", StringComparison.OrdinalIgnoreCase) && !string.IsNullOrWhiteSpace(item.Path))
+                    value = ExtractJsonValue(body, item.Path!);
+                else if (string.Equals(item.Type, "mathCaptcha", StringComparison.OrdinalIgnoreCase))
+                {
+                    var imgPath = string.IsNullOrWhiteSpace(item.Path) ? "img" : item.Path!;
+                    var imgBase64 = ExtractJsonValue(body, imgPath);
+                    value = SolveMathCaptcha(imgBase64);
+                }
+                else if (string.Equals(item.Type, "imageCaptcha", StringComparison.OrdinalIgnoreCase))
+                {
+                    value = RecognizeCaptchaText(bytes, item.CharWhitelist);
+                }
+                else if (string.Equals(item.Type, "regex", StringComparison.OrdinalIgnoreCase) && !string.IsNullOrWhiteSpace(item.Pattern))
+                {
+                    var m = Regex.Match(body, item.Pattern!, RegexOptions.IgnoreCase | RegexOptions.Singleline);
+                    if (m.Success) value = m.Groups.Count > 1 ? m.Groups[1].Value : m.Value;
+                }
+                else if (string.Equals(item.Type, "header", StringComparison.OrdinalIgnoreCase) && !string.IsNullOrWhiteSpace(item.Path))
+                {
+                    if (resp.Headers.TryGetValues(item.Path!, out var values)) value = values.FirstOrDefault();
+                }
+
+                if (!string.IsNullOrWhiteSpace(value)) vars[item.Name] = value!;
+                else if (item.Required) throw new InvalidOperationException($"Token已过期或未授权: 预登录未提取到 {item.Name}");
+            }
+        }
+
+        return vars;
+    }
+
+    private static void ApplyPasswordEncrypt(AuthConfig authConfig, Dictionary<string, string> vars)
+    {
+        var cfg = authConfig.PasswordEncrypt;
+        if (cfg == null || string.IsNullOrWhiteSpace(cfg.Name) || string.IsNullOrWhiteSpace(cfg.Value)) return;
+        if (string.Equals(cfg.Type, "rsa", StringComparison.OrdinalIgnoreCase))
+        {
+            var encrypted = EncryptRsaPkcs1(cfg.Value!, cfg.PublicKey);
+            if (!string.IsNullOrWhiteSpace(encrypted)) vars[cfg.Name!] = encrypted!;
+        }
+        else if (string.Equals(cfg.Type, "aes-cbc-zero", StringComparison.OrdinalIgnoreCase))
+        {
+            var encrypted = EncryptAesCbcZeroPadding(cfg.Value!, cfg.Key);
+            if (!string.IsNullOrWhiteSpace(encrypted)) vars[cfg.Name!] = encrypted!;
+        }
+        else
+        {
+            vars[cfg.Name!] = cfg.Value!;
+        }
+    }
+
+    private static string? EncryptRsaPkcs1(string plainText, string? publicKey)
+    {
+        if (string.IsNullOrWhiteSpace(publicKey)) return null;
+        try
+        {
+            using var rsa = RSA.Create();
+            rsa.ImportSubjectPublicKeyInfo(Convert.FromBase64String(publicKey.Replace("\n", "").Replace("\r", "")), out _);
+            var encrypted = rsa.Encrypt(Encoding.UTF8.GetBytes(plainText), RSAEncryptionPadding.Pkcs1);
+            return Convert.ToBase64String(encrypted);
+        }
+        catch { return null; }
+    }
+
+    private static void AddRegexVar(Dictionary<string, string> vars, string name, string text, string pattern)
+    {
+        var match = Regex.Match(text, pattern, RegexOptions.IgnoreCase | RegexOptions.Singleline);
+        if (!match.Success) return;
+        for (var i = 1; i < match.Groups.Count; i++)
+        {
+            if (!match.Groups[i].Success) continue;
+            vars[name] = WebUtility.HtmlDecode(match.Groups[i].Value);
+            return;
+        }
+    }
+
+    private static string? EncryptAesCbcZeroPadding(string plainText, string? key)
+    {
+        if (string.IsNullOrWhiteSpace(key)) return null;
+        try
+        {
+            var keyBytes = Encoding.UTF8.GetBytes(key);
+            using var aes = Aes.Create();
+            aes.Key = keyBytes;
+            aes.IV = keyBytes;
+            aes.Mode = CipherMode.CBC;
+            aes.Padding = PaddingMode.Zeros;
+            using var encryptor = aes.CreateEncryptor();
+            var plainBytes = Encoding.UTF8.GetBytes(plainText);
+            var encrypted = encryptor.TransformFinalBlock(plainBytes, 0, plainBytes.Length);
+            return Convert.ToBase64String(encrypted);
+        }
+        catch { return null; }
+    }
+
+    private static string? RecognizeCaptchaText(byte[] bytes, string? charWhitelist = null)
+    {
+        try
+        {
+            var tmpFile = Path.GetTempFileName() + ".jpg";
+            File.WriteAllBytes(tmpFile, bytes);
+            var whitelistArg = string.IsNullOrWhiteSpace(charWhitelist) ? "" : $", charsets=r'{charWhitelist}'";
+            var psi = new System.Diagnostics.ProcessStartInfo("python", $"-c \"import ddddocr; o=ddddocr.DdddOcr(show_ad=False{whitelistArg}); print(o.classification(open(r'{tmpFile.Replace('\\', '/')}', 'rb').read()))\"")
+            {
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                CreateNoWindow = true
+            };
+            var proc = System.Diagnostics.Process.Start(psi);
+            var raw = proc!.StandardOutput.ReadToEnd().Trim();
+            proc.WaitForExit(15000);
+            try { File.Delete(tmpFile); } catch { }
+            return string.IsNullOrWhiteSpace(raw) ? null : raw.Trim();
+        }
+        catch { return null; }
+    }
+
+    private static string? SolveMathCaptcha(string? imageBase64)
+    {
+        if (string.IsNullOrWhiteSpace(imageBase64)) return null;
+        try
+        {
+            var comma = imageBase64.IndexOf(',');
+            if (comma >= 0) imageBase64 = imageBase64[(comma + 1)..];
+            var bytes = Convert.FromBase64String(imageBase64);
+            var tmpFile = Path.GetTempFileName() + ".jpg";
+            File.WriteAllBytes(tmpFile, bytes);
+            var psi = new System.Diagnostics.ProcessStartInfo("python", $"-c \"import re,sys; import ddddocr; o=ddddocr.DdddOcr(show_ad=False); s=o.classification(open(r'{tmpFile.Replace('\\', '/')}', 'rb').read()); print(s)\"")
+            {
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                CreateNoWindow = true
+            };
+            var proc = System.Diagnostics.Process.Start(psi);
+            var raw = proc!.StandardOutput.ReadToEnd().Trim();
+            proc.WaitForExit(15000);
+            try { File.Delete(tmpFile); } catch { }
+            return EvaluateCaptchaExpression(raw);
+        }
+        catch { return null; }
+    }
+
+    private static string? EvaluateCaptchaExpression(string raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw)) return null;
+        var expr = raw.Replace("×", "*").Replace("x", "*").Replace("X", "*").Replace("÷", "/").Replace("=", "");
+        expr = Regex.Replace(expr, @"\s+", "");
+
+        // ddddocr 对该站点计算验证码通常能识别出前半段表达式，尾部可能混入干扰字符，
+        // 如 0*1-7 实际应按 0*1 计算。因此只取第一个“数字 运算符 数字”。
+        var match = Regex.Match(expr, @"(\d+)\s*([+\-*/])\s*(\d+)");
+        if (!match.Success)
+        {
+            var num = Regex.Match(expr, @"\d+");
+            return num.Success ? num.Value : null;
+        }
+
+        var a = int.Parse(match.Groups[1].Value);
+        var bText = match.Groups[3].Value;
+        // 计算型验证码一般是一位数运算；OCR 偶尔会把后面的干扰数字拼到第二个数，取首位更稳。
+        var b = int.Parse(bText[..1]);
+        var result = match.Groups[2].Value switch
+        {
+            "+" => a + b,
+            "-" => a - b,
+            "*" => a * b,
+            "/" => b == 0 ? 0 : a / b,
+            _ => 0
+        };
+        return result.ToString();
+    }
+
+    private static string ReplaceTemplateVars(string text, Dictionary<string, string> vars)
+    {
+        foreach (var kvp in vars)
+        {
+            text = text.Replace("{{" + kvp.Key + "}}", kvp.Value);
+            text = text.Replace("{{urlencode:" + kvp.Key + "}}", Uri.EscapeDataString(kvp.Value));
+        }
+        return text;
+    }
+
+    private static string? ExtractJsonValue(string body, string path)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(body);
+            if (TryGetByPath(doc.RootElement, path, out var el))
+                return el.ValueKind == JsonValueKind.String ? el.GetString() : el.GetRawText();
+        }
+        catch { }
+        return null;
+    }
+
+    private static void ApplyRequestHeaders(HttpRequestMessage req, Dictionary<string, string>? headers)
+    {
+        if (headers == null) return;
+        foreach (var h in headers)
+        {
+            if (string.Equals(h.Key, "Content-Type", StringComparison.OrdinalIgnoreCase) && req.Content != null)
+            {
+                req.Content.Headers.TryAddWithoutValidation(h.Key, h.Value);
+                continue;
+            }
+            req.Headers.TryAddWithoutValidation(h.Key, h.Value);
+        }
+    }
+
+    private static Dictionary<string, string>? ResolveTemplateParams(Dictionary<string, string>? template, Dictionary<string, string> vars)
+    {
+        if (template == null || template.Count == 0) return null;
+        var dict = new Dictionary<string, string>();
+        foreach (var kvp in template) dict[kvp.Key] = ReplaceTemplateVars(kvp.Value, vars);
+        return dict;
+    }
+
+    private static string AppendQueryParams(string url, Dictionary<string, string>? parameters)
+    {
+        if (parameters == null || parameters.Count == 0) return url;
+        var qs = string.Join("&", parameters.Select(kv => $"{Uri.EscapeDataString(kv.Key)}={Uri.EscapeDataString(kv.Value)}"));
+        return url + (url.Contains('?') ? "&" : "?") + qs;
+    }
+
+    private static string? ExtractToken(string body, TokenExtractConfig? cfg)
+    {
+        if (cfg == null || string.IsNullOrWhiteSpace(body)) return null;
+        if (!string.IsNullOrWhiteSpace(cfg.Source) && !string.Equals(cfg.Source, "json", StringComparison.OrdinalIgnoreCase))
+            return null;
+
+        try
+        {
+            using var doc = JsonDocument.Parse(body);
+            var paths = new List<string>();
+            if (cfg.Paths != null) paths.AddRange(cfg.Paths.Where(p => !string.IsNullOrWhiteSpace(p)));
+            if (!string.IsNullOrWhiteSpace(cfg.Path)) paths.Add(cfg.Path!);
+            if (paths.Count == 0) paths.AddRange(new[] { "token", "data.token", "access_token", "data.access_token" });
+
+            foreach (var path in paths)
+            {
+                if (TryGetByPath(doc.RootElement, path, out var el))
+                {
+                    var token = el.ValueKind == JsonValueKind.String ? el.GetString() : el.GetRawText();
+                    if (!string.IsNullOrWhiteSpace(token)) return token.Trim().Trim('"');
+                }
+            }
+        }
+        catch { }
+        return null;
+    }
+
+    private static bool TryGetByPath(JsonElement root, string path, out JsonElement value)
+    {
+        value = root;
+        foreach (var segment in path.Split('.', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            if (value.ValueKind != JsonValueKind.Object) return false;
+            var found = false;
+            foreach (var prop in value.EnumerateObject())
+            {
+                if (string.Equals(prop.Name, segment, StringComparison.OrdinalIgnoreCase))
+                {
+                    value = prop.Value;
+                    found = true;
+                    break;
+                }
+            }
+            if (!found) return false;
+        }
+        return true;
+    }
+
+    private static void ApplyTokenTargets(Dictionary<string, string> headers, string token, List<TokenTargetConfig>? targets)
+    {
+        if (targets == null || targets.Count == 0)
+            targets = new List<TokenTargetConfig> { new() { Type = "header", Name = "Authorization", Prefix = "Bearer " } };
+
+        foreach (var target in targets)
+        {
+            if (string.IsNullOrWhiteSpace(target.Name)) continue;
+            if (string.Equals(target.Type, "cookie", StringComparison.OrdinalIgnoreCase))
+            {
+                var tokenCookie = $"{target.Name}={BuildTokenValue(token, target.Prefix)}";
+                headers["Cookie"] = MergeCookies(GetHeaderValue(headers, "Cookie"), tokenCookie)!;
+            }
+            else
+            {
+                headers[target.Name] = BuildTokenValue(token, target.Prefix);
+            }
+        }
+    }
+
+    private static string BuildTokenValue(string token, string? prefix)
+    {
+        token = token.Trim();
+        if (string.IsNullOrEmpty(prefix)) return token;
+        return token.StartsWith(prefix, StringComparison.OrdinalIgnoreCase) ? token : prefix + token;
+    }
+
+    private static string? GetHeaderValue(Dictionary<string, string> headers, string name)
+    {
+        return headers.TryGetValue(name, out var value) ? value : null;
+    }
+
+    private static string MaskToken(string token)
+    {
+        if (token.Length <= 12) return $"***({token.Length})";
+        return $"{token[..6]}...{token[^6..]}({token.Length})";
+    }
+
+    private static void ThrowIfAuthFailureResponse(string contentType, byte[] bytes)
+    {
+        if (bytes.Length == 0) return;
+        var text = Encoding.UTF8.GetString(bytes);
+        var lower = text.ToLowerInvariant();
+        var keywords = new[] { "unauthorized", "未授权", "tokenversion expire", "token expired", "登录超时", "重新登录", "请登录", "未登录" };
+
+        try
+        {
+            using var doc = JsonDocument.Parse(text);
+            var root = doc.RootElement;
+            if (TryGetByPath(root, "code", out var codeEl) && IsAuthCode(codeEl))
+                throw new InvalidOperationException($"Token已过期或未授权: code={GetElementText(codeEl)}");
+            if (TryGetByPath(root, "status", out var statusEl) && IsAuthCode(statusEl))
+                throw new InvalidOperationException($"Token已过期或未授权: status={GetElementText(statusEl)}");
+            foreach (var path in new[] { "msg", "message", "error" })
+            {
+                if (TryGetByPath(root, path, out var msgEl))
+                {
+                    var msg = GetElementText(msgEl);
+                    if (keywords.Any(k => msg.Contains(k, StringComparison.OrdinalIgnoreCase)))
+                        throw new InvalidOperationException($"Token已过期或未授权: {msg}");
+                }
+            }
+        }
+        catch (JsonException) { }
+
+        if (keywords.Any(k => lower.Contains(k.ToLowerInvariant())))
+            throw new InvalidOperationException("Token已过期或未授权: Unauthorized response");
+        if ((contentType.Contains("html", StringComparison.OrdinalIgnoreCase) || lower.Contains("<html")) &&
+            (lower.Contains("login") || text.Contains("登录")))
+            throw new InvalidOperationException("Token已过期或未授权: 返回登录页面");
+    }
+
+    private static bool IsAuthCode(JsonElement el)
+    {
+        if (el.ValueKind == JsonValueKind.Number && el.TryGetInt32(out var code)) return code is 401 or 403;
+        if (el.ValueKind == JsonValueKind.String) return el.GetString() is "401" or "403";
+        return false;
+    }
+
+    private static string GetElementText(JsonElement el)
+    {
+        return el.ValueKind == JsonValueKind.String ? el.GetString() ?? "" : el.GetRawText();
     }
 
     // ═══════════════════════════════════════════
@@ -895,6 +1457,9 @@ public class CollectionExecutionService
     private class AuthConfig
     {
         public string? LoginPath { get; set; }
+        public string? LoginMethod { get; set; }
+        public int? LoginRetries { get; set; }
+        public string? LoginContentType { get; set; }
         public string? Username { get; set; }
         public string? Password { get; set; }
         public string? LoginBodyJson { get; set; }
@@ -902,8 +1467,55 @@ public class CollectionExecutionService
         public string? LoginPageUrl { get; set; }
         public Dictionary<string, string>? ExtraFields { get; set; }
         public Dictionary<string, string>? LoginParams { get; set; }
+        public Dictionary<string, string>? LoginHeaders { get; set; }
+        public PreLoginConfig? PreLogin { get; set; }
+        public PasswordEncryptConfig? PasswordEncrypt { get; set; }
         public Dictionary<string, string>? Headers { get; set; }
+        public TokenExtractConfig? TokenExtract { get; set; }
         public TokenConfig? Token { get; set; }
+    }
+
+    private class PreLoginConfig
+    {
+        public string? Url { get; set; }
+        public Dictionary<string, string>? Headers { get; set; }
+        public bool IncludeViewState { get; set; }
+        public List<PreLoginExtractConfig>? Extract { get; set; }
+    }
+
+    private class PreLoginExtractConfig
+    {
+        public string? Name { get; set; }
+        public string? Type { get; set; } = "json";
+        public string? Path { get; set; }
+        public string? Pattern { get; set; }
+        public string? CharWhitelist { get; set; }
+        public bool Required { get; set; }
+    }
+
+    private class PasswordEncryptConfig
+    {
+        public string? Type { get; set; } = "rsa";
+        public string? Name { get; set; } = "password";
+        public string? Value { get; set; }
+        public string? PublicKey { get; set; }
+        public string? Key { get; set; }
+    }
+
+    private class TokenExtractConfig
+    {
+        public string? Source { get; set; } = "json";
+        public string? Path { get; set; }
+        public List<string>? Paths { get; set; }
+        public bool Required { get; set; }
+        public List<TokenTargetConfig>? Targets { get; set; }
+    }
+
+    private class TokenTargetConfig
+    {
+        public string? Type { get; set; } = "header";
+        public string? Name { get; set; }
+        public string? Prefix { get; set; }
     }
 
     private class TokenConfig
@@ -932,6 +1544,9 @@ public class CollectionExecutionService
         public string? PythonScript { get; set; }
         public Dictionary<string, string>? QueryParams { get; set; }
         public PaginationConfig? Pagination { get; set; }
+        public List<string>? BusinessDataColumns { get; set; }
+        public Dictionary<string, int>? BusinessDataColumnMap { get; set; }
+        public Dictionary<string, string>? FieldMap { get; set; }
     }
 
     private class PaginationConfig
@@ -939,6 +1554,13 @@ public class CollectionExecutionService
         public int Limit { get; set; } = 1000;
         public string OffsetField { get; set; } = "limitOffset";
         public string LimitField { get; set; } = "limit";
+    }
+
+    private class LoginResult
+    {
+        public string? Cookies { get; set; }
+        public string? Body { get; set; }
+        public string? ExtractedToken { get; set; }
     }
 
     /// <summary>执行 Python 脚本采集，读取 stdout JSON 数组</summary>

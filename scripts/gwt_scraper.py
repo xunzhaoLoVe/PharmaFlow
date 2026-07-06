@@ -87,105 +87,93 @@ if not text.startswith('//OK'):
 
 print(f"Response: {len(text)} chars", file=sys.stderr)
 
-# ═══════════════ 解析 GWT-RPC 响应 ═══════════════
-# 1) 找到双引号数据段 (从 "com.sencha 开始)
-dq_start = re.search(r'"com\.sencha', text)
-if not dq_start:
-    print("No data section found", file=sys.stderr)
-    print("[]")
-    sys.exit(0)
+# ═══════════════ 解析 v4 — 7个二进制块 + 共享JSON ═══════════════
+body = text[4:]  # Remove //OK
 
-data_part = text[dq_start.start():]
+# 1) Parse shared JSON data section
+last_bracket = text.rfind('"],')
+shared_values = []
+if last_bracket >= 0:
+    json_part = text[:last_bracket + 2]
+    open_bracket = json_part.rfind('[')
+    if open_bracket >= 0:
+        json_part = json_part[open_bracket:]
+        json_part = json_part.replace(r'\x3D', '=')
+        try:
+            items = json.loads(json_part)
+            for item in items:
+                if isinstance(item, str) and not re.match(r'(com\.|java\.|rO0)', item) and 'PagingLoad' not in item and 'ArrayList' not in item and 'FlowSaList' not in item:
+                    shared_values.append(str(item))
+        except:
+            pass
 
-# 2) 截断尾部 GWT 元数据 ("],0,7 等)
-end_marker = re.search(r'"\s*\]\s*,', data_part)
-if end_marker:
-    data_part = data_part[:end_marker.start() + 1]
+# 2) Parse binary blocks for unique record IDs
+blocks = re.split(r'(?<=,3,)(?=22,9,)', body)
+block_ids = []
+for block in blocks:
+    if '22,9,' in block:
+        nums = re.findall(r'(\d{6,})', block)
+        if nums:
+            block_ids.append(nums[0])
 
-# 3) 修复转义字符
-data_part = data_part.replace(r'\x3D', '=').replace(r'\x3d', '=')
+print(f"Found {len(block_ids)} records via blocks, {len(shared_values)} shared fields", file=sys.stderr)
 
-# 4) 解析为 JSON 字符串数组
-try:
-    items = json.loads('[' + data_part + ']')
-except json.JSONDecodeError as e:
-    print(f"JSON parse error: {e}", file=sys.stderr)
-    print("[]")
-    sys.exit(0)
-
-# 5) 过滤: 跳过 Java 类型标记，FlowSaList 标记新行
-def is_marker(val):
-    """Java 类型标记、序列化头、容器类型"""
-    if not isinstance(val, str):
-        return True
-    if re.match(r'(com\.|java\.|rO0)', val):
-        return True
-    if 'PagingLoadResultBean' in val or 'ArrayList' in val:
-        return True
-    return False
-
-# 提取数据行：FlowSaList 标记行开始
-rows = []
-current_row = []
-for item in items:
-    if isinstance(item, str) and 'FlowSaList' in item:
-        if current_row:
-            rows.append(current_row)
-        current_row = []
-        continue
-    if is_marker(item):
-        continue
-    current_row.append(str(item))
-
-if current_row:
-    rows.append(current_row)
-
-print(f"Data rows: {len(rows)}", file=sys.stderr)
-
-# ═══════════════ 字段映射 ═══════════════
-# FlowSaList bean 字段顺序（跳过 Java 类型字段: Timestamp, Integer, BigDecimal）
-FIELD_NAMES = [
-    "批准文号",      # 0
-    "客户名称",      # 1
-    "数量1",         # 2
-    "金额1",         # 3
-    "商业公司",      # 4
-    "生产厂家",      # 5
-    "商品名称",      # 6
-    "数量2",         # 7
-    "规格",          # 8
-    "单位",          # 9
-    "批号",          # 10
-    "生产企业简称",  # 11
-    "地址",          # 12
-    "金额2",         # 13
-    "单价",          # 14
-    "数量3",         # 15
-    "金额3",         # 16
-    "数量4",         # 17
-    "金额4",         # 18
-    "数量5",         # 19
-    "金额5",         # 20
-    "批号2",         # 21
-]
-
+# 3) Build output: one record per block with shared values + unique ID
+# GWT JSON order: 0=批准文号, 1=客户名称, 2=数量1, 3=金额1, 4=商业公司,
+# 5=生产厂家, 6=商品名称, 7=数量2, 8=规格, 9=单位, 10=批号,
+# 11=生产企业简称, 12=地址, 13=金额2, 14=单价, 15=数量3,
+# 16=金额3, 17=数量4, 18=金额4, 19=数量5, 20=金额5, 21=批号2
+sv = shared_values
 output = []
-for row in rows:
-    entry = {}
-    for i, val in enumerate(row):
-        if i < len(FIELD_NAMES):
-            entry[FIELD_NAMES[i]] = val
-        else:
-            entry[f"Col{i}"] = val
+for bid in block_ids:
+    entry = {
+        "发货单位": sv[4] if len(sv) > 4 else "",
+        "销售日期": "",
+        "客户ID": bid,
+        "客户名称": sv[1] if len(sv) > 1 else "",
+        "商品ID": "",
+        "品名": sv[6] if len(sv) > 6 else "",
+        "规格": sv[8] if len(sv) > 8 else "",
+        "厂家": sv[5] if len(sv) > 5 else "",
+        "数量": sv[2] if len(sv) > 2 else "",
+        "单位": sv[9] if len(sv) > 9 else "",
+        "单价": sv[14] if len(sv) > 14 else "",
+        "金额": sv[3] if len(sv) > 3 else "",
+        "批号": sv[10] if len(sv) > 10 else "",
+        "失效日期": "",
+        "供应商": sv[5] if len(sv) > 5 else "",
+        "收货地址": sv[12] if len(sv) > 12 else "",
+        "流向提供商": "重庆桐君阁",
+    }
+    output.append(entry)
+
+if not output and shared_values:
+    entry = {
+        "发货单位": sv[4] if len(sv) > 4 else "",
+        "销售日期": "",
+        "客户ID": "",
+        "客户名称": sv[1] if len(sv) > 1 else "",
+        "商品ID": "",
+        "品名": sv[6] if len(sv) > 6 else "",
+        "规格": sv[8] if len(sv) > 8 else "",
+        "厂家": sv[5] if len(sv) > 5 else "",
+        "数量": sv[2] if len(sv) > 2 else "",
+        "单位": sv[9] if len(sv) > 9 else "",
+        "单价": sv[14] if len(sv) > 14 else "",
+        "金额": sv[3] if len(sv) > 3 else "",
+        "批号": sv[10] if len(sv) > 10 else "",
+        "失效日期": "",
+        "供应商": sv[5] if len(sv) > 5 else "",
+        "收货地址": sv[12] if len(sv) > 12 else "",
+        "流向提供商": "重庆桐君阁",
+    }
     output.append(entry)
 
 print(f"Records: {len(output)}", file=sys.stderr)
-for r in output:
-    for k in ["商品名称", "规格", "客户名称", "批号", "数量1", "金额1"]:
+for r in output[:1]:
+    for k in ["商品名称", "规格", "客户名称", "批号", "记录ID"]:
         v = r.get(k, "")
-        if len(v) > 50:
-            v = v[:50] + "..."
+        if len(v) > 50: v = v[:50] + "..."
         print(f"  {k}: {v}", file=sys.stderr)
 
-# 输出 JSON 到 stdout
 print(json.dumps(output, ensure_ascii=False))

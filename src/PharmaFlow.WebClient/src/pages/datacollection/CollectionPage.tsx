@@ -38,6 +38,37 @@ const COLUMN_NAMES: Record<string, string> = {
   prodno: '产品编号', prodname: '产品名称', lotno: '批号',
   total: '总数', code: '编码', msg: '消息', rows: '行数据',
   EJDWBH: '二级单位编号', EJDWMC: '二级单位名称', SUPPLIER_NOTES: '供应商备注',
+  // 国药控股广西
+  compname: '公司名称', billno: '单据号', makedate: '开单日期',
+  goodsname: '商品名称', goodscode: '商品编码', cstname: '客户名称',
+  cstcode: '客户编码', lotqty: '销售数量', prc: '含税单价',
+  sumvalue: '含税金额', ghsname: '批次供应商', msunitno: '单位',
+  sellname: '销售代表', saledept: '销售部门', housename: '仓库',
+  packnum: '包装数量', prddate: '生产日期', enddate: '失效日期',
+  releasdate: '释放日期', wmsdate: '出库确认日期', invdate: '发票日期',
+  ardate: '记账日期', flowname: '业务类型', stopflag: '状态标志',
+  addressname: '收货地址', bthdesc: '批次描述', spec: '规格',
+  producer: '生产厂家', lotno: '批号', price: '单价', value: '金额',
+  batchid: '批次ID', billid: '单据ID', buyerid: '采购员ID', compid: '公司ID',
+  cstid: '客户ID', flowid: '流水ID', goodcstid: '商品客户ID', goodid: '商品ID',
+  goodlinkid: '商品关联ID', id: '记录ID', opwms: 'WMS操作', ownerid: '归属ID',
+  rn: '行号', status: '状态码', statusmark: '状态标记', tax: '税额', taxrate: '税率',
+  // 江西PSI
+  releasedateChar: '释放日期', grpno: '单号', goods: '商品编号',
+  goodsName: '商品名称', qty: '数量', amt: '金额', endDateChar: '失效日期',
+  ratifier: '批准文号', custCstcode: '客户编号', custDname: '客户名称',
+  prodDname: '厂家全称', inprc: '进货价', ucstCodeName: '供应商',
+  ulinkCodeName: '关联编码', regionName: '区域', cityName: '城市',
+  ownername: '归属', chgtype: '类型', secondCustDname: '二级客户',
+  custAddress: '地址', ubatchno: '批号2',
+  // 河北国药乐仁堂
+  地市公司: '地市公司', 单据号: '单据号', 流向日期: '流向日期', 单据类型: '单据类型',
+  供应商简称: '供应商简称', 客户编码: '客户编码', 客户名称: '客户名称', 客户简称: '客户简称',
+  商品编码: '商品编码', 商品名称: '商品名称', 规格: '规格', 生产企业名称: '生产企业名称',
+  计量单位: '计量单位', 批号: '批号', 生产日期: '生产日期', 有效期至: '有效期至',
+  采购数量: '采购数量', 销售数量: '销售数量', 部门: '部门', 采购含税进价: '采购含税进价',
+  原始供应商编码: '原始供应商编码', 原始供应商简称: '原始供应商简称',
+  供应商联系人编码: '供应商联系人编码', 剂型: '剂型', 仓储部名称: '仓储部名称',
 };
 
 const SUMMARY_COLUMNS = [
@@ -53,6 +84,45 @@ const SUMMARY_COLUMNS = [
   { key: 'Province', title: '区域', width: 150 },
   { key: 'ExpiryDate', title: '有效期', width: 110 },
 ] as const;
+
+const AUTH_CONFIG_PLACEHOLDER = JSON.stringify({
+  loginPath: '/prod-api/login',
+  loginMethod: 'POST',
+  loginHeaders: {
+    Accept: 'application/json, text/plain, */*',
+    Origin: 'http://111.74.9.154:8097',
+    Referer: 'http://111.74.9.154:8097/login?redirect=%2Findex',
+    isToken: 'false',
+  },
+  preLogin: {
+    url: '/prod-api/captchaImage',
+    extract: [
+      { name: 'uuid', type: 'json', path: 'uuid', required: true },
+      { name: 'code', type: 'mathCaptcha', path: 'img', required: true },
+    ],
+  },
+  passwordEncrypt: {
+    type: 'rsa',
+    name: 'password',
+    value: 'your_plain_password',
+    publicKey: 'MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8A...',
+  },
+  loginBodyJson: '{"username":"...","password":"{{password}}","code":"{{code}}","uuid":"{{uuid}}"}',
+  tokenExtract: {
+    source: 'json',
+    paths: ['token', 'data.token', 'access_token', 'data.access_token'],
+    required: true,
+    targets: [
+      { type: 'header', name: 'Authorization', prefix: 'Bearer ' },
+      { type: 'cookie', name: 'Psi-Syn-Token' },
+    ],
+  },
+  headers: {
+    Accept: 'application/json, text/plain, */*',
+    Origin: 'http://111.74.9.154:8097',
+    Referer: 'http://111.74.9.154:8097/psisyn/psisale',
+  },
+}, null, 2);
 
 export default function CollectionPage() {
   const canWrite = useAuthStore(s => s.canWrite);
@@ -106,7 +176,7 @@ function SourceTab({ canWrite }: { canWrite: boolean }) {
       return;
     }
     if (!v.authConfig || v.authConfig === '{}') {
-      form.setFieldsValue({ authConfig: JSON.stringify({ headers: { 'User-Agent': 'Mozilla/5.0' } }, null, 2) });
+      form.setFieldsValue({ authConfig: AUTH_CONFIG_PLACEHOLDER });
     }
     if (!v.exportConfig || v.exportConfig === '{}') {
       form.setFieldsValue({ exportConfig: JSON.stringify({ export: { url: (v.baseUrl || ''), method: 'GET', dataFormat: 'json' } }, null, 2) });
@@ -191,7 +261,7 @@ function SourceTab({ canWrite }: { canWrite: boolean }) {
                 <strong>认证配置 (JSON)</strong>
                 <Button size="small" onClick={applyHelper}>生成默认模板</Button>
               </div>
-              <Form.Item name="authConfig" rules={[{ required: true }]}><Input.TextArea rows={6} placeholder='{"token":{"cookie_name":"FLOW_TOKEN","value":"..."}}' /></Form.Item>
+              <Form.Item name="authConfig" rules={[{ required: true }]}><Input.TextArea rows={8} placeholder={AUTH_CONFIG_PLACEHOLDER} /></Form.Item>
               <strong>导出配置 (JSON)</strong>
               <Form.Item name="exportConfig" rules={[{ required: true }]}><Input.TextArea rows={8} placeholder='{"export":{"url":"http://...","method":"POST","dataFormat":"json"}}' /></Form.Item>
             </>

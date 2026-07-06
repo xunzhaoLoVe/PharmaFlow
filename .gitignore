@@ -17,6 +17,7 @@ dist/
 _publish/
 
 # Misc
+.codex/
 *.log
 *.tmp
 .DS_Store
