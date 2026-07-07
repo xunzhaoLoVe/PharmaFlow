@@ -9,6 +9,9 @@ import * as XLSX from 'xlsx';
 import { getCustomers, createCustomer, updateCustomer, deleteCustomer } from '../../api/customers';
 import { getDrugDropdown } from '../../api/drugs';
 import RowActions from '../../components/RowActions';
+import TableFilters from '../../components/TableFilters';
+import { applyTableFilters, type TableFilterField, type TableFilterValues } from '../../utils/tableFilters';
+import { textSorter } from '../../utils/tableSorters';
 import type { CustomerDto, DropdownItem } from '../../types';
 
 const PROVINCES = ['','北京','天津','河北','山西','内蒙古','辽宁','吉林','黑龙江','上海','江苏','浙江','安徽','福建','江西','山东','河南','湖北','湖南','广东','广西','海南','重庆','四川','贵州','云南','西藏','陕西','甘肃','青海','宁夏','新疆'];
@@ -25,8 +28,7 @@ export default function CustomerListPage() {
   const [modalOpen, setModalOpen] = useState(false);
   const [editing, setEditing] = useState<CustomerDto | null>(null);
   const [drugOptions, setDrugOptions] = useState<DropdownItem[]>([]);
-  const [filteredCount, setFilteredCount] = useState(0);
-  const [filteredData, setFilteredData] = useState<CustomerDto[]>([]);
+  const [tableFilters, setTableFilters] = useState<TableFilterValues>({});
   const [form] = Form.useForm();
 
   const isDistributor = tab === 'distributor';
@@ -42,7 +44,7 @@ export default function CustomerListPage() {
 
   useEffect(() => { getDrugDropdown().then(setDrugOptions).catch(() => {}); }, []);
   useEffect(() => { load(); }, [tab]);
-  useEffect(() => { setFilteredCount(data.length); setFilteredData(data); }, [data]);
+  useEffect(() => { setTableFilters({}); }, [tab]);
 
   const handleSearch = () => { load(search); };
   const handleAdd = () => {
@@ -85,7 +87,6 @@ export default function CustomerListPage() {
         const rows = XLSX.utils.sheet_to_json<Record<string, string>>(sheet, { defval: '' });
         if (rows.length === 0) { message.warning('Excel 无数据'); return; }
 
-        const colMap: Record<string, string> = {};
         const headers = Object.keys(rows[0]);
         const findCol = (aliases: string[]) => { for (const h of headers) { const t = h.trim(); if (aliases.includes(t)) return t; } return null; };
 
@@ -95,7 +96,6 @@ export default function CustomerListPage() {
         const levelCol = findCol(['经销商级别','级别','等级']);
         const typeCol = findCol(['类型','客户类型','终端类型']);
         const provinceCol = findCol(['省份','省','区域']);
-        const codeCol = findCol(['编码','经销商编码','客户编码','代码','编号']);
         if (!nameCol) { message.error('未找到"名称"列'); return; }
 
         let skipped = 0; const dtos: any[] = [];
@@ -127,19 +127,16 @@ export default function CustomerListPage() {
   };
 
   const distColumns: ColumnsType<CustomerDto> = [
-    { title: '编码', dataIndex: 'code', width: 120 },
-    { title: '名称', dataIndex: 'name', width: 200 },
+    { title: '编码', dataIndex: 'code', width: 120, sorter: textSorter<CustomerDto>(r => r.code) },
+    { title: '名称', dataIndex: 'name', width: 200, sorter: textSorter<CustomerDto>(r => r.name) },
     { title: '省份', dataIndex: 'province', width: 80,
-      filters: PROVINCES.filter(p => p).map(p => ({ text: p, value: p })),
-      onFilter: (v, r) => r.province === v,
+      sorter: textSorter<CustomerDto>(r => r.province),
     },
     { title: '药品名称', dataIndex: 'drugName', width: 140,
-      filters: [...new Set(filteredData.map(d => d.drugName).filter(Boolean))].sort().map(n => ({ text: n, value: n })),
-      onFilter: (v, r) => (r.drugName || '') === (v as string),
+      sorter: textSorter<CustomerDto>(r => r.drugName),
     },
     { title: '级别', dataIndex: 'levelName', width: 100,
-      filters: DISTRIBUTOR_LEVELS.filter(l => l).map(l => ({ text: l, value: l })),
-      onFilter: (v, r) => r.levelName === v,
+      sorter: textSorter<CustomerDto>(r => r.levelName),
     },
     ...(canWrite ? [{ title: '操作', width: 110, render: (_: any, r: any) => (
         <RowActions actions={[
@@ -149,19 +146,16 @@ export default function CustomerListPage() {
     }] : []),
   ];
   const endColumns: ColumnsType<CustomerDto> = [
-    { title: '编码', dataIndex: 'code', width: 120 },
-    { title: '名称', dataIndex: 'name', width: 200 },
+    { title: '编码', dataIndex: 'code', width: 120, sorter: textSorter<CustomerDto>(r => r.code) },
+    { title: '名称', dataIndex: 'name', width: 200, sorter: textSorter<CustomerDto>(r => r.name) },
     { title: '省份', dataIndex: 'province', width: 80,
-      filters: PROVINCES.filter(p => p).map(p => ({ text: p, value: p })),
-      onFilter: (v, r) => r.province === v,
+      sorter: textSorter<CustomerDto>(r => r.province),
     },
     { title: '药品名称', dataIndex: 'drugName', width: 140,
-      filters: [...new Set(filteredData.map(d => d.drugName).filter(Boolean))].sort().map(n => ({ text: n, value: n })),
-      onFilter: (v, r) => (r.drugName || '') === (v as string),
+      sorter: textSorter<CustomerDto>(r => r.drugName),
     },
     { title: '类型', dataIndex: 'customerTypeName', width: 100,
-      filters: END_TYPES.map(t => ({ text: t, value: t })),
-      onFilter: (v, r) => r.customerTypeName === v,
+      sorter: textSorter<CustomerDto>(r => r.customerTypeName),
     },
     ...(canWrite ? [{ title: '操作', width: 110, render: (_: any, r: any) => (
         <RowActions actions={[
@@ -170,6 +164,14 @@ export default function CustomerListPage() {
         ]} />),
     }] : []),
   ];
+  const filterFields: TableFilterField<CustomerDto>[] = [
+    { key: 'province', label: '省份', getValue: r => r.province },
+    { key: 'drugName', label: '药品名称', getValue: r => r.drugName },
+    isDistributor
+      ? { key: 'levelName', label: '级别', getValue: r => r.levelName }
+      : { key: 'customerTypeName', label: '类型', getValue: r => r.customerTypeName },
+  ];
+  const tableData = applyTableFilters(data, filterFields, tableFilters);
 
   return (
     <div>
@@ -177,6 +179,7 @@ export default function CustomerListPage() {
         <Input placeholder="客户名称/编码" value={search} onChange={e => setSearch(e.target.value)}
           onPressEnter={handleSearch} prefix={<SearchOutlined />} style={{ width: 220 }} allowClear />
         <Button type="primary" onClick={handleSearch}>搜索</Button>
+        <TableFilters rows={data} fields={filterFields} value={tableFilters} onChange={setTableFilters} />
         {canWrite && <Button type="primary" icon={<PlusOutlined />} onClick={handleAdd}>新增客户</Button>}
         {canWrite && <Upload accept=".xlsx" showUploadList={false} beforeUpload={handleExcelImport}>
           <Button icon={<UploadOutlined />}>导入Excel</Button>
@@ -187,9 +190,8 @@ export default function CustomerListPage() {
           }
         }}>清空</Button>}
       </Space>
-      <Table rowKey="id" columns={isDistributor ? distColumns : endColumns} dataSource={data} loading={loading}
-        onChange={(_p, _f, _s, extra) => { setFilteredCount(extra.currentDataSource.length); setFilteredData(extra.currentDataSource as CustomerDto[]); }}
-        pagination={{ defaultPageSize: 10, showTotal: () => `共 ${filteredCount} 条`, showSizeChanger: true }} />
+      <Table rowKey="id" columns={isDistributor ? distColumns : endColumns} dataSource={tableData} loading={loading}
+        pagination={{ defaultPageSize: 10, showTotal: () => `共 ${tableData.length} 条`, showSizeChanger: true }} />
       <Modal title={editing ? '编辑客户' : '新增客户'} open={modalOpen} onOk={handleOk} onCancel={() => setModalOpen(false)}>
         <Form form={form} layout="vertical">
           <Form.Item name="name" label="客户名称" rules={[{ required: true }]}><Input /></Form.Item>

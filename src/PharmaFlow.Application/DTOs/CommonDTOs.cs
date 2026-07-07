@@ -327,6 +327,14 @@ public record CollectionSummaryRecordDto
     public DateTime CreatedAt { get; set; }
 }
 
+public record CollectionSummaryFilterOptionsDto
+{
+    public List<string> DrugNames { get; set; } = new();
+    public List<string> Specifications { get; set; } = new();
+    public List<string> BatchNos { get; set; } = new();
+    public List<string> Provinces { get; set; } = new();
+}
+
 public record ReviewRequest
 {
     public List<Guid> RecordIds { get; set; } = new();

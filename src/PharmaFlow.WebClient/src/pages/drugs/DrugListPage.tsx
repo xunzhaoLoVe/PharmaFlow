@@ -6,6 +6,9 @@ import * as XLSX from 'xlsx';
 import { useAuthStore } from '../../store/authStore';
 import { getDrugs, createDrug, updateDrug, deleteDrug } from '../../api/drugs';
 import RowActions from '../../components/RowActions';
+import TableFilters from '../../components/TableFilters';
+import { applyTableFilters, type TableFilterField, type TableFilterValues } from '../../utils/tableFilters';
+import { textSorter } from '../../utils/tableSorters';
 import type { DrugDto } from '../../types';
 
 export default function DrugListPage() {
@@ -15,6 +18,7 @@ export default function DrugListPage() {
   const [search, setSearch] = useState('');
   const [modalOpen, setModalOpen] = useState(false);
   const [editing, setEditing] = useState<DrugDto | null>(null);
+  const [tableFilters, setTableFilters] = useState<TableFilterValues>({});
   const [form] = Form.useForm();
 
   const load = useCallback(async (s = search) => {
@@ -25,11 +29,7 @@ export default function DrugListPage() {
     } finally { setLoading(false); }
   }, [search]);
 
-  const [filteredCount, setFilteredCount] = useState(0);
-  const [filteredData, setFilteredData] = useState<DrugDto[]>([]);
-
   useEffect(() => { load(); }, []);
-  useEffect(() => { setFilteredCount(data.length); setFilteredData(data); }, [data]);
 
   const handleSearch = () => { load(search); };
   const handleAdd = () => { setEditing(null); form.resetFields(); setModalOpen(true); };
@@ -89,14 +89,12 @@ export default function DrugListPage() {
   };
 
   const columns: ColumnsType<DrugDto> = [
-    { title: '药品编码', dataIndex: 'code', width: 150 },
+    { title: '药品编码', dataIndex: 'code', width: 150, sorter: textSorter<DrugDto>(r => r.code) },
     { title: '药品名称', dataIndex: 'name', width: 250,
-      filters: [...new Set((filteredData.length > 0 ? filteredData : data).map(d => d.name).filter(Boolean))].sort().map(n => ({ text: n, value: n })),
-      onFilter: (v, r) => r.name === (v as string),
+      sorter: textSorter<DrugDto>(r => r.name),
     },
     { title: '规格', dataIndex: 'specification', width: 200,
-      filters: [...new Set((filteredData.length > 0 ? filteredData : data).map(d => d.specification).filter(Boolean))].sort().map(s => ({ text: s, value: s })),
-      onFilter: (v, r) => (r.specification || '') === (v as string),
+      sorter: textSorter<DrugDto>(r => r.specification),
     },
     ...(canWrite ? [{ title: '操作', width: 110, render: (_: any, r: DrugDto) => (
         <RowActions actions={[
@@ -105,6 +103,12 @@ export default function DrugListPage() {
         ]} />),
     }] : []),
   ];
+  const filterFields: TableFilterField<DrugDto>[] = [
+    { key: 'code', label: '药品编码', getValue: r => r.code },
+    { key: 'name', label: '药品名称', getValue: r => r.name },
+    { key: 'specification', label: '规格', getValue: r => r.specification },
+  ];
+  const tableData = applyTableFilters(data, filterFields, tableFilters);
 
   return (
     <div>
@@ -112,14 +116,14 @@ export default function DrugListPage() {
         <Input placeholder="药品名称" value={search} onChange={e => setSearch(e.target.value)}
           onPressEnter={handleSearch} prefix={<SearchOutlined />} style={{ width: 220 }} allowClear />
         <Button type="primary" onClick={handleSearch}>搜索</Button>
+        <TableFilters rows={data} fields={filterFields} value={tableFilters} onChange={setTableFilters} />
         {canWrite && <Button type="primary" icon={<PlusOutlined />} onClick={handleAdd}>新增药品</Button>}
         {canWrite && <Upload accept=".xlsx" showUploadList={false} beforeUpload={handleExcelImport}>
           <Button icon={<UploadOutlined />}>导入Excel</Button>
         </Upload>}
       </Space>
-      <Table rowKey="id" columns={columns} dataSource={data} loading={loading}
-        onChange={(_p, _f, _s, extra) => { setFilteredCount(extra.currentDataSource.length); setFilteredData(extra.currentDataSource as DrugDto[]); }}
-        pagination={{ defaultPageSize: 10, showTotal: () => `共 ${filteredCount} 条`, showSizeChanger: true }} />
+      <Table rowKey="id" columns={columns} dataSource={tableData} loading={loading}
+        pagination={{ defaultPageSize: 10, showTotal: () => `共 ${tableData.length} 条`, showSizeChanger: true }} />
       <Modal title={editing ? '编辑药品' : '新增药品'} open={modalOpen} onOk={handleOk} onCancel={() => setModalOpen(false)}>
         <Form form={form} layout="vertical">
           <Form.Item name="name" label="药品名称" rules={[{ required: true, message: '请输入药品名称' }]}><Input /></Form.Item>

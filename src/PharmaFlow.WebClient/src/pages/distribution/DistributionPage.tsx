@@ -5,6 +5,9 @@ import type { ColumnsType } from 'antd/es/table';
 import apiClient from '../../api/client';
 import { getDistribution, deleteDistribution } from '../../api/distribution';
 import RowActions from '../../components/RowActions';
+import TableFilters from '../../components/TableFilters';
+import { applyTableFilters, type TableFilterField, type TableFilterValues } from '../../utils/tableFilters';
+import { numberSorter, textSorter } from '../../utils/tableSorters';
 import type { ApiResponse, DistributionRecordDto } from '../../types';
 
 // WPF 布局常量
@@ -28,9 +31,9 @@ const TIER_LABELS = ['生产厂家', '一级经销', '二级经销', '三级经�
 export default function DistributionPage() {
   const [data, setData] = useState<DistributionRecordDto[]>([]);
   const [loading, setLoading] = useState(false);
-  const [filteredCount, setFilteredCount] = useState(0);
   const [searchDrug, setSearchDrug] = useState('');
   const [searchBatch, setSearchBatch] = useState('');
+  const [tableFilters, setTableFilters] = useState<TableFilterValues>({});
   const [showTrace, setShowTrace] = useState(false);
   const [traceData, setTraceData] = useState<any>(null);
   const [graphScale, setGraphScale] = useState<number | null>(null);
@@ -90,16 +93,27 @@ export default function DistributionPage() {
   const handleDelete = async (id: string) => { await deleteDistribution(id); load(); };
 
   const columns: ColumnsType<DistributionRecordDto> = [
-    { title: '药品名称', dataIndex: 'drugName', width: 130 }, { title: '规格', dataIndex: 'specification', width: 90 },
-    { title: '批号', dataIndex: 'batchNo', width: 110 }, { title: '来源', dataIndex: 'fromCustomerName', width: 140 },
-    { title: '去向', dataIndex: 'toCustomerName', width: 140 }, { title: '数量', dataIndex: 'quantity', width: 70 },
-    { title: '日期', dataIndex: 'distributionDate', width: 100, render: (v: string) => v ? v.substring(0, 10) : '-' },
+    { title: '药品名称', dataIndex: 'drugName', width: 130, sorter: textSorter<DistributionRecordDto>(r => r.drugName) },
+    { title: '规格', dataIndex: 'specification', width: 90, sorter: textSorter<DistributionRecordDto>(r => r.specification) },
+    { title: '批号', dataIndex: 'batchNo', width: 110, sorter: textSorter<DistributionRecordDto>(r => r.batchNo) },
+    { title: '来源', dataIndex: 'fromCustomerName', width: 140, sorter: textSorter<DistributionRecordDto>(r => r.fromCustomerName) },
+    { title: '去向', dataIndex: 'toCustomerName', width: 140, sorter: textSorter<DistributionRecordDto>(r => r.toCustomerName) },
+    { title: '数量', dataIndex: 'quantity', width: 70, sorter: numberSorter<DistributionRecordDto>(r => r.quantity) },
+    { title: '日期', dataIndex: 'distributionDate', width: 100, sorter: textSorter<DistributionRecordDto>(r => r.distributionDate), render: (v: string) => v ? v.substring(0, 10) : '-' },
     { title: '操作', width: 64, render: (_, r) => (
         <RowActions actions={[
           { key: 'delete', label: '删除', icon: <DeleteOutlined />, tone: 'danger', confirmTitle: '确定删除？', onClick: () => handleDelete(r.id) },
         ]} />),
     },
   ];
+  const filterFields: TableFilterField<DistributionRecordDto>[] = [
+    { key: 'drugName', label: '药品名称', getValue: r => r.drugName },
+    { key: 'specification', label: '规格', getValue: r => r.specification },
+    { key: 'batchNo', label: '批号', getValue: r => r.batchNo },
+    { key: 'fromCustomerName', label: '来源', getValue: r => r.fromCustomerName },
+    { key: 'toCustomerName', label: '去向', getValue: r => r.toCustomerName },
+  ];
+  const tableData = applyTableFilters(data, filterFields, tableFilters);
 
   // ════════════ 节点卡片（匹配 WPF FlowNodeControl） ════════════
   const NodeCard = ({ node }: { node: any }) => {
@@ -311,6 +325,7 @@ export default function DistributionPage() {
         <Input placeholder="药品名称" value={searchDrug} onChange={e => setSearchDrug(e.target.value)}
           onPressEnter={handleSearch} style={{ width: 140 }} allowClear />
         <Button type="primary" icon={<SearchOutlined />} onClick={handleSearch}>查询</Button>
+        <TableFilters rows={data} fields={filterFields} value={tableFilters} onChange={setTableFilters} />
         <Button icon={<ApartmentOutlined />} onClick={handleTrace} disabled={!searchBatch.trim()}>流向追溯</Button>
       </Space>
       {showTrace && traceData ? (
@@ -357,9 +372,8 @@ export default function DistributionPage() {
           <Button style={{ marginTop: 12 }} onClick={() => setShowTrace(false)}>返回列表</Button>
         </>
       ) : (
-        <Table rowKey="id" columns={columns} dataSource={data} loading={loading}
-          onChange={(_p, _f, _s, extra) => setFilteredCount(extra.currentDataSource.length)}
-          pagination={{ defaultPageSize: 10, showTotal: () => `共 ${filteredCount} 条`, showSizeChanger: true }} />
+        <Table rowKey="id" columns={columns} dataSource={tableData} loading={loading}
+          pagination={{ defaultPageSize: 10, showTotal: () => `共 ${tableData.length} 条`, showSizeChanger: true }} />
       )}
     </div>
   );

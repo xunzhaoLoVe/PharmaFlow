@@ -127,14 +127,29 @@ public class CollectionController : ControllerBase
         return Ok(ApiResponse<IReadOnlyList<DropdownItem>>.Ok(result));
     }
 
+    [HttpGet("summary/filter-options")]
+    public async Task<ActionResult<ApiResponse<CollectionSummaryFilterOptionsDto>>> GetSummaryFilterOptions(
+        [FromQuery] Guid? sourceId = null)
+    {
+        var result = await _collectionService.GetSummaryFilterOptionsAsync(sourceId);
+        return Ok(ApiResponse<CollectionSummaryFilterOptionsDto>.Ok(result));
+    }
+
     [HttpGet("summary")]
     public async Task<ActionResult<ApiResponse<PagedResult<CollectionSummaryRecordDto>>>> GetSummary(
         [FromQuery] int page = 0, [FromQuery] int size = 20,
         [FromQuery] Guid? sourceId = null, [FromQuery] string? search = null,
         [FromQuery] string? dataType = null,
-        [FromQuery] DateTime? dateFrom = null, [FromQuery] DateTime? dateTo = null)
+        [FromQuery] DateTime? dateFrom = null, [FromQuery] DateTime? dateTo = null,
+        [FromQuery] string? syncStatus = null,
+        [FromQuery] string? sortField = null, [FromQuery] string? sortOrder = null,
+        [FromQuery] string? sourceSearch = null, [FromQuery] string? targetSearch = null,
+        [FromQuery] string? drugName = null, [FromQuery] string? specification = null,
+        [FromQuery] string? batchNo = null, [FromQuery] string? province = null)
     {
-        var result = await _collectionService.GetSummaryPagedAsync(page, size, sourceId, search, dataType, dateFrom, dateTo);
+        var result = await _collectionService.GetSummaryPagedAsync(
+            page, size, sourceId, search, dataType, dateFrom, dateTo, syncStatus,
+            sortField, sortOrder, sourceSearch, targetSearch, drugName, specification, batchNo, province);
         return Ok(ApiResponse<PagedResult<CollectionSummaryRecordDto>>.Ok(result));
     }
 

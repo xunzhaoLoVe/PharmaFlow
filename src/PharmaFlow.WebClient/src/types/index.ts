@@ -87,6 +87,7 @@ export interface InventoryDto {
   isLowStock: boolean;
   customerName?: string;
   customerLevel?: string;
+  province?: string;
 }
 
 // ── 采购 ──
@@ -192,6 +193,9 @@ export interface DistributionRecordDto {
   toCustomerName?: string;
   fromCustomerName?: string;
   quantity: number;
+  taxedUnitPrice?: number;
+  salesPerson?: string;
+  deliveryOrderNo?: string;
   distributionDate: string;
   operator?: string;
   province?: string;

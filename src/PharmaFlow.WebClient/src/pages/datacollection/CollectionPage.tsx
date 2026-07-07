@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useLocation } from 'react-router-dom';
-import { Table, Button, Modal, Form, Input, Select, Switch, Space, Tag, message, Popconfirm, DatePicker } from 'antd';
-import { CheckCircleOutlined, DeleteOutlined, EditOutlined, EyeOutlined, FileTextOutlined, KeyOutlined, PlusOutlined, ReloadOutlined, RollbackOutlined, ThunderboltOutlined } from '@ant-design/icons';
+import { Table, Button, Modal, Form, Input, Select, Switch, Space, Tag, message, Popconfirm, DatePicker, Badge, Popover } from 'antd';
+import { CheckCircleOutlined, ClearOutlined, DeleteOutlined, EditOutlined, EyeOutlined, FileTextOutlined, FilterOutlined, KeyOutlined, PlusOutlined, ReloadOutlined, RollbackOutlined, ThunderboltOutlined } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
 import { useAuthStore } from '../../store/authStore';
 import * as dcApi from '../../api/datacollection';
@@ -490,6 +490,27 @@ function formatSummaryDate(value: unknown) {
   return `${y}-${m}-${d}`;
 }
 
+const EMPTY_SUMMARY_FILTER_OPTIONS: dcApi.CollectionSummaryFilterOptions = {
+  drugNames: [],
+  specifications: [],
+  batchNos: [],
+  provinces: [],
+};
+
+function distinctSummaryOptions(values: Array<string | undefined>) {
+  return Array.from(new Set(values.map(v => String(v || '').trim()).filter(Boolean)))
+    .sort((a, b) => a.localeCompare(b, 'zh-Hans-CN', { numeric: true, sensitivity: 'base' }));
+}
+
+function buildSummaryFilterOptions(rows: CollectionSummaryRecordDto[]): dcApi.CollectionSummaryFilterOptions {
+  return {
+    drugNames: distinctSummaryOptions(rows.map(r => r.drugName)),
+    specifications: distinctSummaryOptions(rows.map(r => r.specification)),
+    batchNos: distinctSummaryOptions(rows.map(r => r.batchNo)),
+    provinces: distinctSummaryOptions(rows.map(r => r.province)),
+  };
+}
+
 function TaskMapView({ sourceName, sourceId, onSaved }: { taskId?: string; sourceName: string; sourceId: string; onSaved: () => void }) {
   const [sourceFields, setSourceFields] = useState<string[]>([]);
   const [previewRows, setPreviewRows] = useState<any[]>([]);
@@ -674,14 +695,25 @@ function SummaryTab() {
   const [loading, setLoading] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const [sources, setSources] = useState<DropdownItem[]>([]);
+  const [summaryFilterOptions, setSummaryFilterOptions] = useState<dcApi.CollectionSummaryFilterOptions>(EMPTY_SUMMARY_FILTER_OPTIONS);
   const [sourceFilter, setSourceFilter] = useState<string | undefined>();
   const [dataTypeFilter, setDataTypeFilter] = useState<string | undefined>();
-  const [searchInput, setSearchInput] = useState('');
-  const [search, setSearch] = useState('');
+  const [syncStatusFilter, setSyncStatusFilter] = useState<string | undefined>();
+  const [drugNameFilter, setDrugNameFilter] = useState('');
+  const [specificationFilter, setSpecificationFilter] = useState('');
+  const [batchNoFilter, setBatchNoFilter] = useState('');
+  const [provinceFilter, setProvinceFilter] = useState('');
+  const [filterOpen, setFilterOpen] = useState(false);
+  const [sourceSearchInput, setSourceSearchInput] = useState('');
+  const [sourceSearch, setSourceSearch] = useState('');
+  const [targetSearchInput, setTargetSearchInput] = useState('');
+  const [targetSearch, setTargetSearch] = useState('');
   const [dateRange, setDateRange] = useState<any>(null);
   const [page, setPage] = useState(0);
   const [pageSize, setPageSize] = useState(20);
   const [total, setTotal] = useState(0);
+  const [sortField, setSortField] = useState<string | undefined>();
+  const [sortOrder, setSortOrder] = useState<'ascend' | 'descend' | undefined>();
 
   const loadSources = useCallback(async () => {
     try {
@@ -698,6 +730,31 @@ function SummaryTab() {
     loadSources();
   }, [loadSources]);
 
+  const loadSummaryFilterOptions = useCallback(async () => {
+    try {
+      const options = await dcApi.getSummaryFilterOptions(sourceFilter);
+      setSummaryFilterOptions(options);
+    } catch {
+      try {
+        const fallback = await dcApi.getSummary({ page: 0, size: 500, sourceId: sourceFilter });
+        setSummaryFilterOptions(buildSummaryFilterOptions(fallback.items));
+      } catch {
+        setSummaryFilterOptions(EMPTY_SUMMARY_FILTER_OPTIONS);
+      }
+    }
+  }, [sourceFilter]);
+
+  useEffect(() => {
+    loadSummaryFilterOptions();
+  }, [loadSummaryFilterOptions]);
+
+  useEffect(() => {
+    if (drugNameFilter && !summaryFilterOptions.drugNames.includes(drugNameFilter)) setDrugNameFilter('');
+    if (specificationFilter && !summaryFilterOptions.specifications.includes(specificationFilter)) setSpecificationFilter('');
+    if (batchNoFilter && !summaryFilterOptions.batchNos.includes(batchNoFilter)) setBatchNoFilter('');
+    if (provinceFilter && !summaryFilterOptions.provinces.includes(provinceFilter)) setProvinceFilter('');
+  }, [summaryFilterOptions, drugNameFilter, specificationFilter, batchNoFilter, provinceFilter]);
+
   const load = useCallback(async () => {
     setLoading(true);
     try {
@@ -705,10 +762,18 @@ function SummaryTab() {
         page,
         size: pageSize,
         sourceId: sourceFilter,
-        search: search || undefined,
         dataType: dataTypeFilter,
+        syncStatus: syncStatusFilter,
+        sourceSearch: sourceSearch || undefined,
+        targetSearch: targetSearch || undefined,
+        drugName: drugNameFilter.trim() || undefined,
+        specification: specificationFilter.trim() || undefined,
+        batchNo: batchNoFilter.trim() || undefined,
+        province: provinceFilter.trim() || undefined,
         dateFrom: dateRange?.[0]?.format('YYYY-MM-DD'),
         dateTo: dateRange?.[1]?.format('YYYY-MM-DD'),
+        sortField,
+        sortOrder,
       });
       setData(result.items);
       setTotal(result.totalCount);
@@ -717,10 +782,30 @@ function SummaryTab() {
     } finally {
       setLoading(false);
     }
-  }, [page, pageSize, sourceFilter, search, dataTypeFilter, dateRange]);
+  }, [page, pageSize, sourceFilter, sourceSearch, targetSearch, dataTypeFilter, syncStatusFilter, drugNameFilter, specificationFilter, batchNoFilter, provinceFilter, dateRange, sortField, sortOrder]);
   useEffect(() => { load(); }, [load]);
 
   const resetToFirstPage = () => setPage(0);
+  const clearSummaryFilters = () => {
+    setSourceFilter(undefined);
+    setDataTypeFilter(undefined);
+    setSyncStatusFilter(undefined);
+    setDrugNameFilter('');
+    setSpecificationFilter('');
+    setBatchNoFilter('');
+    setProvinceFilter('');
+    resetToFirstPage();
+  };
+  const activeFilterCount = [
+    sourceFilter,
+    dataTypeFilter,
+    syncStatusFilter,
+    drugNameFilter.trim() || undefined,
+    specificationFilter.trim() || undefined,
+    batchNoFilter.trim() || undefined,
+    provinceFilter.trim() || undefined,
+  ].filter(Boolean).length;
+  const sortOrderFor = (field: string) => sortField === field ? sortOrder : undefined;
 
   const dataTypeOptions = Array.from(new Set([
     ...data.map(x => x.dataType).filter(Boolean),
@@ -747,34 +832,162 @@ function SummaryTab() {
     if ((dataType || '').includes('销售')) return <Tag color="purple">销售管理</Tag>;
     return <Tag>待识别</Tag>;
   };
+  const getSummaryFieldValue = (record: CollectionSummaryRecordDto, key: string) => {
+    const field = summaryFieldMap[key];
+    return field ? record[field] : '';
+  };
+  const renderSummaryValue = (record: CollectionSummaryRecordDto, key: string) => {
+    const value = getSummaryFieldValue(record, key);
+    if (value == null || value === '') return '';
+    return (key === 'DistributionDate' || key === 'ExpiryDate') ? formatSummaryDate(value) : String(value);
+  };
+  const toSelectOptions = (values: string[]) => values.map(value => ({ label: value, value }));
+  const summaryFilterContent = (
+    <Space direction="vertical" size={10} style={{ width: 280 }}>
+      <div>
+        <div style={{ marginBottom: 4, color: '#475569', fontSize: 12 }}>采集源</div>
+        <Select
+          value={sourceFilter}
+          allowClear
+          showSearch
+          placeholder="选择采集源"
+          style={{ width: '100%' }}
+          filterOption={(input, option) => String(option?.label ?? '').includes(input)}
+          onChange={(v) => { setSourceFilter(v); resetToFirstPage(); }}
+          options={sources.map(s => ({ label: s.name, value: s.id }))}
+        />
+      </div>
+      <div>
+        <div style={{ marginBottom: 4, color: '#475569', fontSize: 12 }}>数据类型</div>
+        <Select
+          value={dataTypeFilter}
+          allowClear
+          placeholder="选择数据类型"
+          style={{ width: '100%' }}
+          onChange={(v) => { setDataTypeFilter(v); resetToFirstPage(); }}
+          options={dataTypeOptions}
+        />
+      </div>
+      <div>
+        <div style={{ marginBottom: 4, color: '#475569', fontSize: 12 }}>同步状态</div>
+        <Select
+          value={syncStatusFilter}
+          allowClear
+          placeholder="选择同步状态"
+          style={{ width: '100%' }}
+          onChange={(v) => { setSyncStatusFilter(v); resetToFirstPage(); }}
+          options={[
+            { label: '已同步', value: 'Synced' },
+            { label: '待同步', value: 'Pending' },
+          ]}
+        />
+      </div>
+      <div>
+        <div style={{ marginBottom: 4, color: '#475569', fontSize: 12 }}>药品名称</div>
+        <Select
+          value={drugNameFilter || undefined}
+          allowClear
+          showSearch
+          placeholder="选择药品名称"
+          notFoundContent="暂无可选项"
+          style={{ width: '100%' }}
+          filterOption={(input, option) => String(option?.label ?? '').includes(input)}
+          onChange={value => { setDrugNameFilter(value || ''); resetToFirstPage(); }}
+          options={toSelectOptions(summaryFilterOptions.drugNames)}
+        />
+      </div>
+      <div>
+        <div style={{ marginBottom: 4, color: '#475569', fontSize: 12 }}>规格</div>
+        <Select
+          value={specificationFilter || undefined}
+          allowClear
+          showSearch
+          placeholder="选择规格"
+          notFoundContent="暂无可选项"
+          style={{ width: '100%' }}
+          filterOption={(input, option) => String(option?.label ?? '').includes(input)}
+          onChange={value => { setSpecificationFilter(value || ''); resetToFirstPage(); }}
+          options={toSelectOptions(summaryFilterOptions.specifications)}
+        />
+      </div>
+      <div>
+        <div style={{ marginBottom: 4, color: '#475569', fontSize: 12 }}>批号</div>
+        <Select
+          value={batchNoFilter || undefined}
+          allowClear
+          showSearch
+          placeholder="选择批号"
+          notFoundContent="暂无可选项"
+          style={{ width: '100%' }}
+          filterOption={(input, option) => String(option?.label ?? '').includes(input)}
+          onChange={value => { setBatchNoFilter(value || ''); resetToFirstPage(); }}
+          options={toSelectOptions(summaryFilterOptions.batchNos)}
+        />
+      </div>
+      <div>
+        <div style={{ marginBottom: 4, color: '#475569', fontSize: 12 }}>区域</div>
+        <Select
+          value={provinceFilter || undefined}
+          allowClear
+          showSearch
+          placeholder="选择区域"
+          notFoundContent="暂无可选项"
+          style={{ width: '100%' }}
+          filterOption={(input, option) => String(option?.label ?? '').includes(input)}
+          onChange={value => { setProvinceFilter(value || ''); resetToFirstPage(); }}
+          options={toSelectOptions(summaryFilterOptions.provinces)}
+        />
+      </div>
+      <Space style={{ justifyContent: 'space-between', width: '100%' }}>
+        <Button icon={<ClearOutlined />} onClick={clearSummaryFilters} disabled={activeFilterCount === 0}>重置</Button>
+        <Button type="primary" onClick={() => setFilterOpen(false)}>完成</Button>
+      </Space>
+    </Space>
+  );
 
   const columns: ColumnsType<any> = [
-    { title: '采集源', dataIndex: 'sourceName', width: 120, fixed: 'left' as const, render: (v: string) => <Tag color="blue">{v}</Tag> },
+    { title: '采集源', dataIndex: 'sourceName', key: 'sourceName', width: 120, fixed: 'left' as const, sorter: true, sortOrder: sortOrderFor('sourceName'), render: (v: string) => <Tag color="blue">{v}</Tag> },
     { title: '同步状态', dataIndex: 'syncStatus', width: 90, fixed: 'left' as const, render: (_: string, r: CollectionSummaryRecordDto) => (
       r.targetEntityId ? <Tag color="green">已同步</Tag> : <Tag color="orange">待同步</Tag>
-    ) },
-    { title: '同步去向', dataIndex: 'dataType', width: 90, fixed: 'left' as const, render: renderSyncTarget },
-    ...SUMMARY_COLUMNS.map(c => ({ title: c.title, width: c.width, ellipsis: true as const,
-      render: (_: any, r: CollectionSummaryRecordDto) => {
-        const v = r[summaryFieldMap[c.key]];
-        if (v == null || v === '') return '';
-        return (c.key === 'DistributionDate' || c.key === 'ExpiryDate') ? formatSummaryDate(v) : String(v);
-      },
+    ), key: 'syncStatus', sorter: true, sortOrder: sortOrderFor('syncStatus') },
+    { title: '同步去向', dataIndex: 'dataType', key: 'syncTarget', width: 90, fixed: 'left' as const, sorter: true, sortOrder: sortOrderFor('syncTarget'), render: renderSyncTarget },
+    ...SUMMARY_COLUMNS.map(c => ({ title: c.title, dataIndex: c.key, key: c.key, width: c.width, ellipsis: true as const,
+      sorter: true,
+      sortOrder: sortOrderFor(c.key),
+      render: (_: any, r: CollectionSummaryRecordDto) => renderSummaryValue(r, c.key),
     })),
   ];
 
   return <div>
     <div style={{ marginBottom: 16, display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
-      <Input.Search value={searchInput} allowClear placeholder="搜索药品/客户/批号/地区" style={{ width: 260 }}
-        onChange={e => setSearchInput(e.target.value)}
-        onSearch={v => { setSearch(v.trim()); resetToFirstPage(); }} />
-      <Select value={sourceFilter} allowClear placeholder="按采集源筛选" style={{ width: 200 }}
-        onChange={(v) => { setSourceFilter(v); resetToFirstPage(); }}
-        options={sources.map(s => ({ label: s.name, value: s.id }))} />
-      <Select value={dataTypeFilter} allowClear placeholder="按数据类型筛选" style={{ width: 160 }}
-        onChange={(v) => { setDataTypeFilter(v); resetToFirstPage(); }}
-        options={dataTypeOptions} />
-      <DatePicker.RangePicker value={dateRange} onChange={(v) => { setDateRange(v); resetToFirstPage(); }} />
+      <Input.Search value={sourceSearchInput} allowClear placeholder="搜索来源" style={{ width: 200 }}
+        onChange={e => {
+          setSourceSearchInput(e.target.value);
+          if (!e.target.value) { setSourceSearch(''); resetToFirstPage(); }
+        }}
+        onSearch={v => { setSourceSearch(v.trim()); resetToFirstPage(); }} />
+      <Input.Search value={targetSearchInput} allowClear placeholder="搜索去向" style={{ width: 200 }}
+        onChange={e => {
+          setTargetSearchInput(e.target.value);
+          if (!e.target.value) { setTargetSearch(''); resetToFirstPage(); }
+        }}
+        onSearch={v => { setTargetSearch(v.trim()); resetToFirstPage(); }} />
+      <DatePicker.RangePicker
+        value={dateRange}
+        placeholder={['开始日期', '结束日期']}
+        onChange={(v) => { setDateRange(v); resetToFirstPage(); }}
+      />
+      <Popover
+        trigger="click"
+        open={filterOpen}
+        onOpenChange={setFilterOpen}
+        placement="bottomLeft"
+        content={summaryFilterContent}
+      >
+        <Badge count={activeFilterCount} size="small">
+          <Button icon={<FilterOutlined />}>筛选</Button>
+        </Badge>
+      </Popover>
       <Button icon={<ReloadOutlined />} onClick={load}>刷新</Button>
       <Button icon={<ThunderboltOutlined />} loading={syncing} onClick={async () => {
         setSyncing(true);
@@ -795,6 +1008,15 @@ function SummaryTab() {
       </Popconfirm>
       <Tag>{total} 条</Tag></div>
     <Table columns={columns} dataSource={data} rowKey="id" loading={loading} scroll={{ x: 1800 }} size="small"
+      onChange={(_, __, sorter: any, extra) => {
+        if (extra.action !== 'sort') return;
+        const activeSorter = Array.isArray(sorter) ? sorter[0] : sorter;
+        const nextOrder = activeSorter?.order as 'ascend' | 'descend' | undefined;
+        const nextField = nextOrder ? String(activeSorter?.columnKey || activeSorter?.field || '') : undefined;
+        setSortField(nextField || undefined);
+        setSortOrder(nextOrder);
+        resetToFirstPage();
+      }}
       pagination={{
         current: page + 1,
         pageSize,

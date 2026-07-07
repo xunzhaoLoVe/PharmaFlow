@@ -1,14 +1,19 @@
 import { useEffect, useState, useCallback } from 'react';
-import { Table, Button, Space, Input, Modal, Form, Select, message, Upload } from 'antd';
+import { Table, Button, Space, Input, Modal, Form, Select, message, Upload, DatePicker } from 'antd';
 import { PlusOutlined, UploadOutlined, DeleteOutlined, SearchOutlined } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
+import dayjs from 'dayjs';
 import * as XLSX from 'xlsx';
 import { useAuthStore } from '../../store/authStore';
 import apiClient from '../../api/client';
 import { getDrugDropdown } from '../../api/drugs';
-import { getCustomerDropdown } from '../../api/customers';
+import { getDistributorDropdown } from '../../api/customers';
 import { getDistribution, recordDownstream, deleteDistribution } from '../../api/distribution';
 import RowActions from '../../components/RowActions';
+import TableFilters from '../../components/TableFilters';
+import { isDateInRange, type DateRangeValue } from '../../utils/dateRange';
+import { applyTableFilters, type TableFilterField, type TableFilterValues } from '../../utils/tableFilters';
+import { numberSorter, textSorter } from '../../utils/tableSorters';
 import type { ApiResponse, DistributionRecordDto, DropdownItem } from '../../types';
 
 export default function SalesListPage() {
@@ -21,7 +26,8 @@ export default function SalesListPage() {
   const [drugs, setDrugs] = useState<DropdownItem[]>([]);
   const [fromCustomers, setFromCustomers] = useState<DropdownItem[]>([]);
   const [toCustomers, setToCustomers] = useState<DropdownItem[]>([]);
-  const [drugSpecMap, setDrugSpecMap] = useState<Record<string, string>>({});
+  const [tableFilters, setTableFilters] = useState<TableFilterValues>({});
+  const [dateRange, setDateRange] = useState<DateRangeValue>(null);
   const [form] = Form.useForm();
 
   const load = useCallback(async () => {
@@ -36,15 +42,11 @@ export default function SalesListPage() {
 
   const loadMeta = async () => {
     const d = await getDrugDropdown();
-    const fc = await getCustomerDropdown();
+    const fc = await getDistributorDropdown();
     const tc = await apiClient.get<ApiResponse<DropdownItem[]>>('/customers/end-dropdown').then(r => r.data!);
     setDrugs(d); setFromCustomers(fc); setToCustomers([...fc, ...tc].sort((a, b) => a.name.localeCompare(b.name)));
-    const map: Record<string, string> = {};
-    d.forEach(drug => { map[drug.id] = drug.name.split(' [')[1]?.replace(']', '') || ''; });
-    setDrugSpecMap(map);
   };
 
-  const [filteredCount, setFilteredCount] = useState(0);
   const [searchFrom2, setSearchFrom2] = useState('');
   const [searchTo2, setSearchTo2] = useState('');
 
@@ -52,12 +54,13 @@ export default function SalesListPage() {
   const filtered = data.filter(item => {
     if (searchFrom2 && !(item.fromCustomerName || '').includes(searchFrom2)) return false;
     if (searchTo2 && !(item.toCustomerName || '').includes(searchTo2)) return false;
+    if (!isDateInRange(item.distributionDateDisplay || item.distributionDate, dateRange)) return false;
     return true;
   });
 
   const handleAdd = () => {
     form.resetFields();
-    form.setFieldsValue({ quantity: 1 });
+    form.setFieldsValue({ quantity: 1, distributionDate: dayjs() });
     setModalOpen(true);
   };
   const handleDelete = async (id: string) => { await deleteDistribution(id); message.success('已删除'); load(); };
@@ -73,7 +76,7 @@ export default function SalesListPage() {
       fromCustomerId: values.fromCustomerId, fromCustomerName: fromCust?.name || '',
       toCustomerId: values.toCustomerId, toCustomerName: toCust?.name || '',
       quantity: parseFloat(values.quantity) || 0,
-      distributionDate: values.distributionDate || '',
+      distributionDate: values.distributionDate ? dayjs(values.distributionDate).format('YYYY-MM-DD') : '',
       province: values.province || '',
     });
     message.success('下游流转记录已保存'); setModalOpen(false); load();
@@ -97,7 +100,7 @@ export default function SalesListPage() {
         if (!drugCol || !fromCol || !toCol) { message.error('缺少必要列：药品、来源、去向'); return; }
 
         const [allDrugs, allFrom, allTo] = await Promise.all([
-          getDrugDropdown(), getCustomerDropdown(),
+          getDrugDropdown(), getDistributorDropdown(),
           apiClient.get<ApiResponse<DropdownItem[]>>('/customers/end-dropdown').then(r => r.data!),
         ]);
         const allCustomers = [...allFrom, ...allTo];
@@ -139,22 +142,20 @@ export default function SalesListPage() {
 
   const columns: ColumnsType<DistributionRecordDto> = [
     { title: '药品名称', dataIndex: 'drugName', width: 130,
-      filters: [...new Set((filtered.length > 0 ? filtered : data).map(d => d.drugName).filter(Boolean))].sort().map(n => ({ text: n, value: n })),
-      onFilter: (v, r) => r.drugName === (v as string),
+      sorter: textSorter<DistributionRecordDto>(r => r.drugName),
     },
     { title: '规格', dataIndex: 'specification', width: 100,
-      filters: [...new Set((filtered.length > 0 ? filtered : data).map(d => d.specification).filter(Boolean))].sort().map(s => ({ text: s, value: s })),
-      onFilter: (v, r) => (r.specification || '') === (v as string),
+      sorter: textSorter<DistributionRecordDto>(r => r.specification),
     },
-    { title: '批号', dataIndex: 'batchNo', width: 110 },
-    { title: '来源', dataIndex: 'fromCustomerName', width: 160 },
-    { title: '去向', dataIndex: 'toCustomerName', width: 160 },
-    { title: '数量', dataIndex: 'quantity', width: 70 },
+    { title: '批号', dataIndex: 'batchNo', width: 110, sorter: textSorter<DistributionRecordDto>(r => r.batchNo) },
+    { title: '来源', dataIndex: 'fromCustomerName', width: 160, sorter: textSorter<DistributionRecordDto>(r => r.fromCustomerName) },
+    { title: '去向', dataIndex: 'toCustomerName', width: 160, sorter: textSorter<DistributionRecordDto>(r => r.toCustomerName) },
+    { title: '数量', dataIndex: 'quantity', width: 70, sorter: numberSorter<DistributionRecordDto>(r => r.quantity) },
     { title: '省份', dataIndex: 'province', width: 80,
-      filters: [...new Set((filtered.length > 0 ? filtered : data).map(d => d.province).filter(Boolean))].sort().map(p => ({ text: p, value: p })),
-      onFilter: (v, r) => (r.province || '') === (v as string),
+      sorter: textSorter<DistributionRecordDto>(r => r.province),
     },
     { title: '日期', dataIndex: 'distributionDateDisplay', width: 100,
+      sorter: textSorter<DistributionRecordDto>(r => r.distributionDateDisplay || r.distributionDate),
       render: (v: string, r: DistributionRecordDto) => v || (r.distributionDate ? r.distributionDate.substring(0, 10) : '-'),
     },
     { title: '操作', width: 64, render: (_, r) => (
@@ -163,6 +164,24 @@ export default function SalesListPage() {
         ]} />),
     },
   ];
+  const filterFields: TableFilterField<DistributionRecordDto>[] = [
+    { key: 'drugName', label: '药品名称', getValue: r => r.drugName },
+    { key: 'specification', label: '规格', getValue: r => r.specification },
+    { key: 'batchNo', label: '批号', getValue: r => r.batchNo },
+    { key: 'fromCustomerName', label: '来源', getValue: r => r.fromCustomerName },
+    { key: 'toCustomerName', label: '去向', getValue: r => r.toCustomerName },
+    { key: 'province', label: '省份', getValue: r => r.province },
+  ];
+  const tableData = applyTableFilters(filtered, filterFields, tableFilters);
+  const drugOptions = drugs.map(d => {
+    const [name, specPart] = d.name.split(' [');
+    const spec = specPart?.replace(']', '') || '';
+    return {
+      label: spec ? `${name} / ${spec}` : name,
+      value: d.id,
+      searchText: `${name}${spec}`,
+    };
+  });
 
   return (
     <div>
@@ -172,6 +191,13 @@ export default function SalesListPage() {
         <Input placeholder="去向客户" value={searchTo} onChange={e => setSearchTo(e.target.value)}
           style={{ width: 160 }} allowClear />
         <Button type="primary" icon={<SearchOutlined />} onClick={() => { setSearchFrom2(searchFrom); setSearchTo2(searchTo); }}>搜索</Button>
+        <DatePicker.RangePicker
+          allowClear
+          placeholder={['开始日期', '结束日期']}
+          onChange={(_, values) => setDateRange(values[0] && values[1] ? [values[0], values[1]] : null)}
+          style={{ width: 250 }}
+        />
+        <TableFilters rows={filtered} fields={filterFields} value={tableFilters} onChange={setTableFilters} />
         {canWrite && <Button type="primary" icon={<PlusOutlined />} onClick={handleAdd}>录入下游流转</Button>}
         {canWrite && <Upload accept=".xlsx" showUploadList={false} beforeUpload={handleExcelImport}>
           <Button icon={<UploadOutlined />}>导入Excel</Button>
@@ -180,20 +206,21 @@ export default function SalesListPage() {
           if (window.confirm('确定清空销售记录？')) { await apiClient.delete('/distribution/clear?fromSelf=false'); message.success('已清空'); load(); }
         }}>清空</Button>}
       </Space>
-      <Table rowKey="id" columns={columns} dataSource={filtered} loading={loading}
-        onChange={(_p, _f, _s, extra) => setFilteredCount(extra.currentDataSource.length)}
-        pagination={{ defaultPageSize: 10, showTotal: () => `共 ${filteredCount || filtered.length} 条`, showSizeChanger: true }} />
+      <Table rowKey="id" columns={columns} dataSource={tableData} loading={loading}
+        pagination={{ defaultPageSize: 10, showTotal: () => `共 ${tableData.length} 条`, showSizeChanger: true }} />
       <Modal title="录入下游流转" open={modalOpen} onOk={handleOk} onCancel={() => setModalOpen(false)} width={560}>
         <Form form={form} layout="vertical">
-          <Form.Item name="drugId" label="药品" rules={[{ required: true }]}>
-            <Select showSearch placeholder="选择药品"
-              filterOption={(v, o) => (o?.label as string || '').includes(v)}
-              onChange={id => { form.setFieldsValue({ specification: drugSpecMap[id] || '' }); }}
-              options={drugs.map(d => ({ label: d.name.split(' [')[0], value: d.id }))} /></Form.Item>
-          <Form.Item name="specification" label="规格"><Input disabled placeholder="自动填充" /></Form.Item>
+          <Form.Item name="drugId" label="药品名称 / 规格型号" rules={[{ required: true }]}>
+            <Select
+              showSearch
+              placeholder="选择药品及规格"
+              filterOption={(v, o) => String(o?.searchText || o?.label || '').includes(v)}
+              options={drugOptions}
+            />
+          </Form.Item>
           <Form.Item name="batchNo" label="批号" rules={[{ required: true }]}><Input /></Form.Item>
-          <Form.Item name="fromCustomerId" label="来源客户" rules={[{ required: true }]}>
-            <Select showSearch placeholder="选择来源"
+          <Form.Item name="fromCustomerId" label="来源经销商" rules={[{ required: true }]}>
+            <Select showSearch placeholder="选择来源经销商"
               filterOption={(v, o) => (o?.label as string || '').includes(v)}
               options={fromCustomers.map(c => ({ label: c.name, value: c.id }))} /></Form.Item>
           <Form.Item name="toCustomerId" label="去向客户" rules={[{ required: true }]}>
@@ -202,7 +229,9 @@ export default function SalesListPage() {
               options={toCustomers.map(c => ({ label: c.name, value: c.id }))} /></Form.Item>
           <Form.Item name="province" label="省份"><Input placeholder="如 江苏" /></Form.Item>
           <Form.Item name="quantity" label="数量" rules={[{ required: true }]}><Input placeholder="如 10 或 -5" /></Form.Item>
-          <Form.Item name="distributionDate" label="日期"><Input placeholder="2026-05 或 2026-05-06" /></Form.Item>
+          <Form.Item name="distributionDate" label="日期" rules={[{ required: true, message: '请选择日期' }]}>
+            <DatePicker allowClear={false} style={{ width: '100%' }} placeholder="选择日期" />
+          </Form.Item>
         </Form>
       </Modal>
     </div>

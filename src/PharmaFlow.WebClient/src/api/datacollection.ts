@@ -57,13 +57,27 @@ export async function clearSummary(): Promise<void> {
 
 export async function getSummary(params: {
   page?: number; size?: number; sourceId?: string; search?: string;
-  dataType?: string; dateFrom?: string; dateTo?: string;
+  dataType?: string; dateFrom?: string; dateTo?: string; syncStatus?: string;
+  sortField?: string; sortOrder?: string;
+  sourceSearch?: string; targetSearch?: string;
+  drugName?: string; specification?: string; batchNo?: string; province?: string;
 }): Promise<PagedResult<CollectionSummaryRecordDto>> {
   return getData(await apiClient.get<ApiResponse<PagedResult<CollectionSummaryRecordDto>>>('/collection/summary', { params }));
 }
 
 export async function getSummarySourceDropdown(): Promise<DropdownItem[]> {
   return getData(await apiClient.get<ApiResponse<DropdownItem[]>>('/collection/summary/sources'));
+}
+
+export interface CollectionSummaryFilterOptions {
+  drugNames: string[];
+  specifications: string[];
+  batchNos: string[];
+  provinces: string[];
+}
+
+export async function getSummaryFilterOptions(sourceId?: string): Promise<CollectionSummaryFilterOptions> {
+  return getData(await apiClient.get<ApiResponse<CollectionSummaryFilterOptions>>('/collection/summary/filter-options', { params: { sourceId } }));
 }
 
 export interface SyncSummaryResult {

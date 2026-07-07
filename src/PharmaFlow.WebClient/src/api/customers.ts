@@ -27,6 +27,10 @@ export async function getCustomerDropdown(level?: string): Promise<DropdownItem[
   return getData(await apiClient.get<ApiResponse<DropdownItem[]>>('/customers/dropdown', { params: { level } }));
 }
 
+export async function getDistributorDropdown(): Promise<DropdownItem[]> {
+  return getData(await apiClient.get<ApiResponse<DropdownItem[]>>('/customers/dropdown', { params: { level: 'all' } }));
+}
+
 export async function getCustomerCategories(): Promise<DropdownItem[]> {
   return getData(await apiClient.get<ApiResponse<DropdownItem[]>>('/customers/categories'));
 }

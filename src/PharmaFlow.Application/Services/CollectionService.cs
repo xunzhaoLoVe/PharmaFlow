@@ -227,13 +227,154 @@ public class CollectionService : ICollectionService
             .ToList();
     }
 
+    public async Task<CollectionSummaryFilterOptionsDto> GetSummaryFilterOptionsAsync(Guid? sourceId = null)
+    {
+        var rows = await BuildSummaryRowsAsync(sourceId);
+        return new CollectionSummaryFilterOptionsDto
+        {
+            DrugNames = BuildDistinctOptions(rows.Select(r => r.DrugName)),
+            Specifications = BuildDistinctOptions(rows.Select(r => r.Specification)),
+            BatchNos = BuildDistinctOptions(rows.Select(r => r.BatchNo)),
+            Provinces = BuildDistinctOptions(rows.Select(r => r.Province)),
+        };
+    }
+
     public async Task<PagedResult<CollectionSummaryRecordDto>> GetSummaryPagedAsync(int pageIndex, int pageSize,
         Guid? sourceId = null, string? search = null, string? dataType = null,
-        DateTime? dateFrom = null, DateTime? dateTo = null)
+        DateTime? dateFrom = null, DateTime? dateTo = null, string? syncStatus = null,
+        string? sortField = null, string? sortOrder = null,
+        string? sourceSearch = null, string? targetSearch = null,
+        string? drugName = null, string? specification = null,
+        string? batchNo = null, string? province = null)
     {
         pageIndex = Math.Max(0, pageIndex);
         pageSize = Math.Clamp(pageSize, 1, 500);
 
+        var rows = await BuildSummaryRowsAsync(sourceId);
+
+        if (!string.IsNullOrWhiteSpace(search))
+        {
+            var keyword = search.Trim();
+            rows = rows.Where(r => SummaryRowContains(r, keyword)).ToList();
+        }
+
+        rows = FilterContains(rows, r => r.CompanyName, sourceSearch);
+        rows = FilterContains(rows, r => r.ToCustomerName, targetSearch);
+        rows = FilterEquals(rows, r => r.DrugName, drugName);
+        rows = FilterEquals(rows, r => r.Specification, specification);
+        rows = FilterEquals(rows, r => r.BatchNo, batchNo);
+        rows = FilterEquals(rows, r => r.Province, province);
+
+        if (!string.IsNullOrWhiteSpace(dataType))
+        {
+            var filter = dataType.Trim();
+            rows = rows
+                .Where(r => string.Equals(r.DataType, filter, StringComparison.OrdinalIgnoreCase))
+                .ToList();
+        }
+
+        if (!string.IsNullOrWhiteSpace(syncStatus))
+        {
+            var filter = syncStatus.Trim();
+            rows = filter.Equals("Synced", StringComparison.OrdinalIgnoreCase)
+                ? rows.Where(r => r.TargetEntityId.HasValue).ToList()
+                : filter.Equals("Pending", StringComparison.OrdinalIgnoreCase)
+                    ? rows.Where(r => !r.TargetEntityId.HasValue).ToList()
+                    : rows;
+        }
+
+        if (dateFrom.HasValue)
+        {
+            var from = dateFrom.Value.Date;
+            rows = rows
+                .Where(r => TryParseDate(r.DistributionDate, out var date) && date >= from)
+                .ToList();
+        }
+
+        if (dateTo.HasValue)
+        {
+            var toExclusive = dateTo.Value.Date.AddDays(1);
+            rows = rows
+                .Where(r => TryParseDate(r.DistributionDate, out var date) && date < toExclusive)
+                .ToList();
+        }
+
+        rows = SortSummaryRows(rows, sortField, sortOrder);
+
+        var total = rows.Count;
+        var items = rows.Skip(pageIndex * pageSize).Take(pageSize).ToList();
+
+        return new PagedResult<CollectionSummaryRecordDto>
+        {
+            Items = items,
+            TotalCount = total,
+            PageIndex = pageIndex,
+            PageSize = pageSize,
+        };
+    }
+
+    private static List<CollectionSummaryRecordDto> SortSummaryRows(
+        List<CollectionSummaryRecordDto> rows,
+        string? sortField,
+        string? sortOrder)
+    {
+        if (string.IsNullOrWhiteSpace(sortField) || string.IsNullOrWhiteSpace(sortOrder))
+            return rows;
+
+        var descending = sortOrder.Equals("descend", StringComparison.OrdinalIgnoreCase);
+        return sortField switch
+        {
+            "sourceName" => OrderText(rows, r => r.SourceName, descending),
+            "syncStatus" => OrderText(rows, r => r.SyncStatus, descending),
+            "syncTarget" or "DataType" => OrderText(rows, r => r.DataType, descending),
+            "DrugName" => OrderText(rows, r => r.DrugName, descending),
+            "Specification" => OrderText(rows, r => r.Specification, descending),
+            "BatchNo" => OrderText(rows, r => r.BatchNo, descending),
+            "CompanyName" => OrderText(rows, r => r.CompanyName, descending),
+            "ToCustomerName" => OrderText(rows, r => r.ToCustomerName, descending),
+            "TaxedUnitPrice" => descending
+                ? rows.OrderByDescending(r => r.TaxedUnitPrice ?? 0).ToList()
+                : rows.OrderBy(r => r.TaxedUnitPrice ?? 0).ToList(),
+            "Quantity" => descending
+                ? rows.OrderByDescending(r => r.Quantity ?? 0).ToList()
+                : rows.OrderBy(r => r.Quantity ?? 0).ToList(),
+            "DistributionDate" => OrderDate(rows, r => r.DistributionDate, descending),
+            "Province" => OrderText(rows, r => r.Province, descending),
+            "ExpiryDate" => OrderDate(rows, r => r.ExpiryDate, descending),
+            _ => rows,
+        };
+    }
+
+    private static List<CollectionSummaryRecordDto> FilterContains(
+        IEnumerable<CollectionSummaryRecordDto> rows,
+        Func<CollectionSummaryRecordDto, string?> selector,
+        string? keyword)
+    {
+        if (string.IsNullOrWhiteSpace(keyword))
+            return rows.ToList();
+
+        var filter = keyword.Trim();
+        return rows
+            .Where(row => (selector(row) ?? "").Contains(filter, StringComparison.OrdinalIgnoreCase))
+            .ToList();
+    }
+
+    private static List<CollectionSummaryRecordDto> FilterEquals(
+        IEnumerable<CollectionSummaryRecordDto> rows,
+        Func<CollectionSummaryRecordDto, string?> selector,
+        string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return rows.ToList();
+
+        var filter = value.Trim();
+        return rows
+            .Where(row => string.Equals((selector(row) ?? "").Trim(), filter, StringComparison.OrdinalIgnoreCase))
+            .ToList();
+    }
+
+    private async Task<List<CollectionSummaryRecordDto>> BuildSummaryRowsAsync(Guid? sourceId = null)
+    {
         var query = _db.CollectionRecords
             .Include(r => r.Task)
             .Include(r => r.Source)
@@ -259,47 +400,33 @@ public class CollectionService : ICollectionService
             rows.Add(row);
         }
 
-        if (!string.IsNullOrWhiteSpace(search))
-        {
-            var keyword = search.Trim();
-            rows = rows.Where(r => SummaryRowContains(r, keyword)).ToList();
-        }
-
-        if (!string.IsNullOrWhiteSpace(dataType))
-        {
-            var filter = dataType.Trim();
-            rows = rows
-                .Where(r => string.Equals(r.DataType, filter, StringComparison.OrdinalIgnoreCase))
-                .ToList();
-        }
-
-        if (dateFrom.HasValue)
-        {
-            var from = dateFrom.Value.Date;
-            rows = rows
-                .Where(r => TryParseDate(r.DistributionDate, out var date) && date >= from)
-                .ToList();
-        }
-
-        if (dateTo.HasValue)
-        {
-            var toExclusive = dateTo.Value.Date.AddDays(1);
-            rows = rows
-                .Where(r => TryParseDate(r.DistributionDate, out var date) && date < toExclusive)
-                .ToList();
-        }
-
-        var total = rows.Count;
-        var items = rows.Skip(pageIndex * pageSize).Take(pageSize).ToList();
-
-        return new PagedResult<CollectionSummaryRecordDto>
-        {
-            Items = items,
-            TotalCount = total,
-            PageIndex = pageIndex,
-            PageSize = pageSize,
-        };
+        return rows;
     }
+
+    private static List<string> BuildDistinctOptions(IEnumerable<string?> values)
+        => values
+            .Select(v => v?.Trim())
+            .Where(v => !string.IsNullOrWhiteSpace(v))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(v => v, StringComparer.OrdinalIgnoreCase)
+            .Select(v => v!)
+            .ToList();
+
+    private static List<CollectionSummaryRecordDto> OrderText(
+        IEnumerable<CollectionSummaryRecordDto> rows,
+        Func<CollectionSummaryRecordDto, string?> selector,
+        bool descending)
+        => descending
+            ? rows.OrderByDescending(selector, StringComparer.OrdinalIgnoreCase).ToList()
+            : rows.OrderBy(selector, StringComparer.OrdinalIgnoreCase).ToList();
+
+    private static List<CollectionSummaryRecordDto> OrderDate(
+        IEnumerable<CollectionSummaryRecordDto> rows,
+        Func<CollectionSummaryRecordDto, string?> selector,
+        bool descending)
+        => descending
+            ? rows.OrderByDescending(r => TryParseDate(selector(r), out var date) ? date : DateTime.MinValue).ToList()
+            : rows.OrderBy(r => TryParseDate(selector(r), out var date) ? date : DateTime.MinValue).ToList();
 
     public async Task<SyncSummaryResultDto> SyncSummaryAsync(Guid? sourceId = null)
     {

@@ -20,9 +20,14 @@ public interface ICollectionService
     Task UnsubmitTaskAsync(Guid id);
     Task ClearSummaryAsync();
     Task<IReadOnlyList<DropdownItem>> GetSummarySourceDropdownAsync();
+    Task<CollectionSummaryFilterOptionsDto> GetSummaryFilterOptionsAsync(Guid? sourceId = null);
     Task<PagedResult<CollectionSummaryRecordDto>> GetSummaryPagedAsync(int pageIndex, int pageSize,
         Guid? sourceId = null, string? search = null, string? dataType = null,
-        DateTime? dateFrom = null, DateTime? dateTo = null);
+        DateTime? dateFrom = null, DateTime? dateTo = null, string? syncStatus = null,
+        string? sortField = null, string? sortOrder = null,
+        string? sourceSearch = null, string? targetSearch = null,
+        string? drugName = null, string? specification = null,
+        string? batchNo = null, string? province = null);
     Task<SyncSummaryResultDto> SyncSummaryAsync(Guid? sourceId = null);
     Task<ReapplyTransformResultDto> ReapplyTransformAsync(Guid sourceId);
 
