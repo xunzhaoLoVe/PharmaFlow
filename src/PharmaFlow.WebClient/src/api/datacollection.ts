@@ -1,5 +1,5 @@
 import apiClient, { getData } from './client';
-import type { ApiResponse, PagedResult, DropdownItem, CollectionSourceDto, CollectionTaskDto, CollectionRecordDto } from '../types';
+import type { ApiResponse, PagedResult, DropdownItem, CollectionSourceDto, CollectionTaskDto, CollectionRecordDto, CollectionSummaryRecordDto } from '../types';
 
 // ── Sources ──
 export async function getSources(params: {
@@ -53,6 +53,17 @@ export async function unsubmitTask(id: string): Promise<void> {
 
 export async function clearSummary(): Promise<void> {
   await apiClient.post('/collection/summary/clear');
+}
+
+export async function getSummary(params: {
+  page?: number; size?: number; sourceId?: string; search?: string;
+  dataType?: string; dateFrom?: string; dateTo?: string;
+}): Promise<PagedResult<CollectionSummaryRecordDto>> {
+  return getData(await apiClient.get<ApiResponse<PagedResult<CollectionSummaryRecordDto>>>('/collection/summary', { params }));
+}
+
+export async function getSummarySourceDropdown(): Promise<DropdownItem[]> {
+  return getData(await apiClient.get<ApiResponse<DropdownItem[]>>('/collection/summary/sources'));
 }
 
 export interface SyncSummaryResult {

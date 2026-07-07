@@ -264,24 +264,12 @@ export default function ReportPage() {
 
   return (
     <div style={{ display: 'grid', gap: 16 }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
-        <div>
-          <h2 style={{ margin: 0, color: '#0F172A', fontSize: 22 }}>报表统计</h2>
-          <div style={{ color: '#64748B', marginTop: 4, fontSize: 13 }}>
-            {report ? `${dayjs(report.startDate).format('YYYY-MM-DD')} 至 ${dayjs(report.endDate).format('YYYY-MM-DD')}` : '加载中'}
-          </div>
-        </div>
-        <Space>
-          <Button icon={<ReloadOutlined />} onClick={() => load(filters)} loading={loading}>刷新</Button>
-        </Space>
-      </div>
-
       <Row gutter={[16, 16]}>
         <Col xs={24} sm={12} xl={6}>
-          <MetricCard loading={loading} title="一级经销进货" value={n(metrics?.dealerPurchaseQuantity ?? metrics?.purchaseQuantity)} sub={`进货金额 ${money(metrics?.purchaseAmount)}`} color="#F59E0B" icon={<MedicineBoxOutlined />} />
+          <MetricCard loading={loading} title="采购管理数量" value={n(metrics?.purchaseQuantity)} sub={`采购金额 ${money(metrics?.purchaseAmount)}`} color="#F59E0B" icon={<MedicineBoxOutlined />} />
         </Col>
         <Col xs={24} sm={12} xl={6}>
-          <MetricCard loading={loading} title="卖到终端" value={n(metrics?.dealerTerminalSalesQuantity ?? metrics?.salesQuantity)} sub={`终端销售金额 ${money(metrics?.salesAmount)}`} color="#3B82F6" icon={<BarChartOutlined />} />
+          <MetricCard loading={loading} title="销售管理数量" value={n(metrics?.salesQuantity)} sub={`销售金额 ${money(metrics?.salesAmount)} · 终端 ${n(metrics?.dealerTerminalSalesQuantity)}`} color="#3B82F6" icon={<BarChartOutlined />} />
         </Col>
         <Col xs={24} sm={12} xl={6}>
           <MetricCard loading={loading} title="经销商库存" value={n(metrics?.dealerInventoryQuantity ?? metrics?.inventoryQuantity)} sub={`调拨数量 ${n(metrics?.dealerTransferQuantity)} · 药品 ${metrics?.drugCount ?? 0}`} color="#10B981" icon={<InboxOutlined />} />
@@ -318,7 +306,8 @@ export default function ReportPage() {
             <Input placeholder="客户/供应商" allowClear value={draft.customerName} onChange={e => setDraft({ ...draft, customerName: e.target.value })} style={{ width: 180 }} />
           </Space>
           <Space>
-            <Button icon={<ReloadOutlined />} onClick={resetFilters}>重置</Button>
+            <Button icon={<ReloadOutlined />} onClick={() => load(filters)} loading={loading}>刷新</Button>
+            <Button onClick={resetFilters}>重置</Button>
             <Button type="primary" icon={<SearchOutlined />} onClick={applyFilters} loading={loading}>查询</Button>
           </Space>
         </div>
@@ -326,10 +315,10 @@ export default function ReportPage() {
 
       <Row gutter={[16, 16]}>
         <Col xs={24} xl={12}>
-          <DistributionPanel title="终端药品销售分布" data={report?.drugDistribution ?? []} />
+          <DistributionPanel title="销售药品分布" data={report?.drugDistribution ?? []} />
         </Col>
         <Col xs={24} xl={12}>
-          <DistributionPanel title="终端客户销售分布" data={report?.customerDistribution ?? []} />
+          <DistributionPanel title="销售客户分布" data={report?.customerDistribution ?? []} />
         </Col>
         <Col xs={24} xl={12}>
           <Panel title="区域流向分布">
@@ -361,7 +350,7 @@ export default function ReportPage() {
         </Col>
       </Row>
 
-      <Panel title="一级进货 / 终端销售 / 渠道流向趋势">
+      <Panel title="采购管理 / 销售管理 / 渠道流向趋势">
         <ResponsiveContainer width="100%" height={330}>
           <ComposedChart data={trendData} margin={{ left: 8, right: 20, top: 10, bottom: 4 }}>
             <CartesianGrid stroke="#E2E8F0" />
@@ -370,8 +359,8 @@ export default function ReportPage() {
             <Tooltip formatter={(value: any) => n(Number(value))} />
             <Legend />
             <Area type="monotone" dataKey="flowQuantity" name="流向数量" stroke="#06B6D4" fill="#CFFAFE" strokeWidth={2} />
-            <Bar dataKey="purchaseQuantity" name="一级进货" fill="#F59E0B" radius={[4, 4, 0, 0]} />
-            <Line type="monotone" dataKey="salesQuantity" name="卖到终端" stroke="#3B82F6" strokeWidth={3} dot={{ r: 3 }} />
+            <Bar dataKey="purchaseQuantity" name="采购管理" fill="#F59E0B" radius={[4, 4, 0, 0]} />
+            <Line type="monotone" dataKey="salesQuantity" name="销售管理" stroke="#3B82F6" strokeWidth={3} dot={{ r: 3 }} />
           </ComposedChart>
         </ResponsiveContainer>
       </Panel>

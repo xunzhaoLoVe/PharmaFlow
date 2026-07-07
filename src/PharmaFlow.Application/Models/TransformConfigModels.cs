@@ -4,6 +4,7 @@ namespace PharmaFlow.Application.Models;
 public class TransformConfig
 {
     public string? TargetEntity { get; set; }
+    public string? SourceType { get; set; }
     public Dictionary<string, FieldMapping>? FieldMappings { get; set; }
     public Dictionary<string, Dictionary<string, string>>? ValueMappings { get; set; }
     public Dictionary<string, object>? Defaults { get; set; }

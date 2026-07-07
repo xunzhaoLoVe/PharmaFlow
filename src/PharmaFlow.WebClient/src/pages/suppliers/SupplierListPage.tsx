@@ -1,8 +1,9 @@
 import { useEffect, useState, useCallback } from 'react';
-import { Table, Button, Space, Input, Modal, Form, message, Popconfirm } from 'antd';
-import { PlusOutlined, SearchOutlined } from '@ant-design/icons';
+import { Table, Button, Space, Input, Modal, Form, message } from 'antd';
+import { DeleteOutlined, EditOutlined, PlusOutlined, SearchOutlined } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
 import { getSuppliers, createSupplier, updateSupplier, deleteSupplier } from '../../api/suppliers';
+import RowActions from '../../components/RowActions';
 import type { SupplierDto } from '../../types';
 
 export default function SupplierListPage() {
@@ -39,15 +40,16 @@ export default function SupplierListPage() {
     { title: '编码', dataIndex: 'code', width: 120 }, { title: '名称', dataIndex: 'name', width: 200 },
     { title: '联系人', dataIndex: 'contactPerson', width: 90 }, { title: '电话', dataIndex: 'phone', width: 130 },
     { title: '地址', dataIndex: 'address', width: 200 },
-    { title: '操作', width: 150, render: (_, r) => (
-        <Space><Button size="small" onClick={() => handleEdit(r)}>编辑</Button>
-          <Popconfirm title="确定删除？" onConfirm={() => handleDelete(r.id)}><Button size="small" danger>删除</Button></Popconfirm></Space>),
+    { title: '操作', width: 110, render: (_, r) => (
+        <RowActions actions={[
+          { key: 'edit', label: '编辑', icon: <EditOutlined />, tone: 'primary', onClick: () => handleEdit(r) },
+          { key: 'delete', label: '删除', icon: <DeleteOutlined />, tone: 'danger', confirmTitle: '确定删除？', onClick: () => handleDelete(r.id) },
+        ]} />),
     },
   ];
 
   return (
     <div>
-      <h2 style={{ marginBottom: 16 }}>🏭 供应商管理</h2>
       <Space wrap style={{ marginBottom: 16 }}>
         <Input placeholder="供应商名称" value={search} onChange={e => setSearch(e.target.value)}
           onPressEnter={handleSearch} prefix={<SearchOutlined />} style={{ width: 200 }} allowClear />

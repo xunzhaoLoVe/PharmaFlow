@@ -1,11 +1,13 @@
 import { useState, useEffect, useCallback } from 'react';
-import { Table, Button, Modal, Form, Input, Select, Switch, Space, Tabs, Tag, message, Popconfirm } from 'antd';
-import { PlusOutlined, ReloadOutlined, ThunderboltOutlined } from '@ant-design/icons';
+import { useLocation } from 'react-router-dom';
+import { Table, Button, Modal, Form, Input, Select, Switch, Space, Tag, message, Popconfirm, DatePicker } from 'antd';
+import { CheckCircleOutlined, DeleteOutlined, EditOutlined, EyeOutlined, FileTextOutlined, KeyOutlined, PlusOutlined, ReloadOutlined, RollbackOutlined, ThunderboltOutlined } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
 import { useAuthStore } from '../../store/authStore';
 import * as dcApi from '../../api/datacollection';
+import RowActions from '../../components/RowActions';
 
-import type { CollectionSourceDto, CollectionTaskDto, CollectionRecordDto } from '../../types';
+import type { CollectionSourceDto, CollectionTaskDto, CollectionRecordDto, CollectionSummaryRecordDto, DropdownItem } from '../../types';
 
 const COLUMN_NAMES: Record<string, string> = {
   // 九州通 F字段
@@ -156,14 +158,18 @@ const AUTH_CONFIG_PLACEHOLDER = JSON.stringify({
 
 export default function CollectionPage() {
   const canWrite = useAuthStore(s => s.canWrite);
-  const [activeTab, setActiveTab] = useState('sources');
+  const location = useLocation();
+  const activeModule = location.pathname.endsWith('/data')
+    ? 'datamanage'
+    : location.pathname.endsWith('/summary')
+      ? 'summary'
+      : 'sources';
+
   return (
     <div>
-      <Tabs activeKey={activeTab} onChange={setActiveTab} items={[
-        { key: 'sources', label: '采集源配置', children: <SourceTab canWrite={canWrite} /> },
-        { key: 'datamanage', label: '采集数据管理', children: <DataManageTab /> },
-        { key: 'summary', label: '采集汇总', children: <SummaryTab /> },
-      ]} />
+      {activeModule === 'sources' && <SourceTab canWrite={canWrite} />}
+      {activeModule === 'datamanage' && <DataManageTab />}
+      {activeModule === 'summary' && <SummaryTab />}
     </div>
   );
 }
@@ -252,16 +258,14 @@ function SourceTab({ canWrite }: { canWrite: boolean }) {
       if (r.lastCollectionStatus === 'Token已过期') return <Tag color="red">Token已过期</Tag>;
       return <Tag color={v ? 'green' : 'default'}>{v ? '启用' : '停用'}</Tag>;
     }},
-    ...(canWrite ? [{ title: '操作', width: 220, render: (_: any, r: CollectionSourceDto) => (
-      <Space>
-        <Button size="small" icon={<ThunderboltOutlined />} onClick={() => handleTrigger(r.id)}>采集</Button>
-        <Button size="small" onClick={() => { setEditing(r); fillFormFromSource(r); setModalOpen(true); }}>编辑</Button>
-        {r.lastCollectionStatus === 'Token已过期' && <Button size="small" danger onClick={() => { setTokenSourceId(r.id); setTokenModal(true); }}>更新Token</Button>}
-        <Button size="small" onClick={() => { setLogSourceId(r.id); setLogModal(true); }}>日志</Button>
-        <Popconfirm title="删除？" onConfirm={async () => { await dcApi.deleteSource(r.id); load(); }}>
-          <Button size="small" danger>删除</Button>
-        </Popconfirm>
-      </Space>
+    ...(canWrite ? [{ title: '操作', width: 250, render: (_: any, r: CollectionSourceDto) => (
+      <RowActions actions={[
+        { key: 'collect', label: '采集', icon: <ThunderboltOutlined />, onClick: () => handleTrigger(r.id) },
+        { key: 'edit', label: '编辑', icon: <EditOutlined />, tone: 'primary', onClick: () => { setEditing(r); fillFormFromSource(r); setModalOpen(true); } },
+        r.lastCollectionStatus === 'Token已过期' && { key: 'token', label: '更新Token', icon: <KeyOutlined />, tone: 'danger', onClick: () => { setTokenSourceId(r.id); setTokenModal(true); } },
+        { key: 'log', label: '日志', icon: <FileTextOutlined />, onClick: () => { setLogSourceId(r.id); setLogModal(true); } },
+        { key: 'delete', label: '删除', icon: <DeleteOutlined />, tone: 'danger', confirmTitle: '删除？', onClick: async () => { await dcApi.deleteSource(r.id); load(); } },
+      ]} />
     ) }] : []),
   ];
 
@@ -405,17 +409,13 @@ function DataManageTab() {
       }} />
     ) },
     { title: '操作', width: 260, render: (_: any, r: any) => (
-      <Space>
-        <Button size="small" onClick={() => { setSelectedTask({ id: '', sourceId: r.sourceId, sourceName: r.sourceName } as any); setViewModal(true); }}>查看数据</Button>
-        <Button size="small" onClick={async () => { const res = await dcApi.getTasks({ page: 0, size: 1, sourceId: r.sourceId }); if (res.items[0]) { setSelectedTask(res.items[0]); setMapModal(true); } }}>映射/修正规则</Button>
-        {!r.anySubmitted && <Button size="small" type="primary" onClick={async () => { const res = await dcApi.getTasks({ page: 0, size: 99999, sourceId: r.sourceId }); for (const t of res.items) { await dcApi.submitTask(t.id); } load(); message.success('已提交'); }}>提交</Button>}
-        {r.anySubmitted && <Popconfirm title="取消此采集源已提交到汇总的数据？" onConfirm={async () => { const res = await dcApi.getTasks({ page: 0, size: 99999, sourceId: r.sourceId }); for (const t of res.items.filter(x => x.isSubmitted)) { await dcApi.unsubmitTask(t.id); } load(); message.success('已取消提交'); }}>
-          <Button size="small">取消提交</Button>
-        </Popconfirm>}
-        <Popconfirm title="删除此源所有数据？" onConfirm={async () => { const res = await dcApi.getTasks({ page: 0, size: 99999, sourceId: r.sourceId }); for (const t of res.items) { await dcApi.deleteTask(t.id); } load(); message.success('已删除'); }}>
-          <Button size="small" danger>删除</Button>
-        </Popconfirm>
-      </Space>
+      <RowActions actions={[
+        { key: 'view', label: '查看数据', icon: <EyeOutlined />, onClick: () => { setSelectedTask({ id: '', sourceId: r.sourceId, sourceName: r.sourceName } as any); setViewModal(true); } },
+        { key: 'map', label: '映射/修正', icon: <EditOutlined />, tone: 'primary', onClick: async () => { const res = await dcApi.getTasks({ page: 0, size: 1, sourceId: r.sourceId }); if (res.items[0]) { setSelectedTask(res.items[0]); setMapModal(true); } } },
+        !r.anySubmitted && { key: 'submit', label: '提交', icon: <CheckCircleOutlined />, tone: 'success', onClick: async () => { const res = await dcApi.getTasks({ page: 0, size: 99999, sourceId: r.sourceId }); for (const t of res.items) { await dcApi.submitTask(t.id); } load(); message.success('已提交'); } },
+        r.anySubmitted && { key: 'unsubmit', label: '取消提交', icon: <RollbackOutlined />, tone: 'warning', confirmTitle: '取消此采集源已提交到汇总的数据？', onClick: async () => { const res = await dcApi.getTasks({ page: 0, size: 99999, sourceId: r.sourceId }); for (const t of res.items.filter(x => x.isSubmitted)) { await dcApi.unsubmitTask(t.id); } load(); message.success('已取消提交'); } },
+        { key: 'delete', label: '删除', icon: <DeleteOutlined />, tone: 'danger', confirmTitle: '删除此源所有数据？', onClick: async () => { const res = await dcApi.getTasks({ page: 0, size: 99999, sourceId: r.sourceId }); for (const t of res.items) { await dcApi.deleteTask(t.id); } load(); message.success('已删除'); } },
+      ]} />
     ) },
   ];
 
@@ -670,48 +670,141 @@ function TaskMapView({ sourceName, sourceId, onSaved }: { taskId?: string; sourc
 }
 
 function SummaryTab() {
-  const [data, setData] = useState<CollectionRecordDto[]>([]);
+  const [data, setData] = useState<CollectionSummaryRecordDto[]>([]);
   const [loading, setLoading] = useState(false);
   const [syncing, setSyncing] = useState(false);
-  const [sources, setSources] = useState<CollectionSourceDto[]>([]);
+  const [sources, setSources] = useState<DropdownItem[]>([]);
   const [sourceFilter, setSourceFilter] = useState<string | undefined>();
+  const [dataTypeFilter, setDataTypeFilter] = useState<string | undefined>();
+  const [searchInput, setSearchInput] = useState('');
+  const [search, setSearch] = useState('');
+  const [dateRange, setDateRange] = useState<any>(null);
+  const [page, setPage] = useState(0);
+  const [pageSize, setPageSize] = useState(20);
+  const [total, setTotal] = useState(0);
 
-  const load = useCallback(async () => { setLoading(true); try { const [records, tasks, freshSources] = await Promise.all([dcApi.getRecords({ page: 0, size: 99999, sourceId: sourceFilter }), dcApi.getTasks({ page: 0, size: 99999 }), dcApi.getSources({ page: 0, size: 99999 })]); setSources(freshSources.items); const submitted = new Set(tasks.items.filter(t => t.isSubmitted).map(t => t.id)); const filtered = records.items.filter(x => submitted.has(x.taskId) && !isExcludedFromSummary(x.cleanedDataJson)); const seen = new Set<string>(); const deduped = filtered.filter(x => seen.has(x.rawDataJson) ? false : (seen.add(x.rawDataJson), true)); setData(deduped); } catch { } finally { setLoading(false); } }, [sourceFilter]);
+  const loadSources = useCallback(async () => {
+    try {
+      const freshSources = await dcApi.getSummarySourceDropdown();
+      setSources(freshSources);
+      if (sourceFilter && !freshSources.some(s => s.id === sourceFilter)) {
+        setSourceFilter(undefined);
+        setPage(0);
+      }
+    } catch { }
+  }, [sourceFilter]);
+
+  useEffect(() => {
+    loadSources();
+  }, [loadSources]);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const result = await dcApi.getSummary({
+        page,
+        size: pageSize,
+        sourceId: sourceFilter,
+        search: search || undefined,
+        dataType: dataTypeFilter,
+        dateFrom: dateRange?.[0]?.format('YYYY-MM-DD'),
+        dateTo: dateRange?.[1]?.format('YYYY-MM-DD'),
+      });
+      setData(result.items);
+      setTotal(result.totalCount);
+    } catch (e: any) {
+      message.error(e?.message || '加载采集汇总失败');
+    } finally {
+      setLoading(false);
+    }
+  }, [page, pageSize, sourceFilter, search, dataTypeFilter, dateRange]);
   useEffect(() => { load(); }, [load]);
 
-  const sourceTypeMap: Record<string, string> = {};
-  sources.forEach(s => { try { const tc = JSON.parse(s.transformConfig || '{}'); if (tc.sourceType) sourceTypeMap[s.id] = tc.sourceType; } catch { } });
+  const resetToFirstPage = () => setPage(0);
 
-  const rows = data.map(r => { try { const m = JSON.parse(r.cleanedDataJson || '{}'); m.DataType = sourceTypeMap[r.sourceId] || ''; return { ...r, _m: m }; } catch { return { ...r, _m: { DataType: sourceTypeMap[r.sourceId] || '' } }; } });
+  const dataTypeOptions = Array.from(new Set([
+    ...data.map(x => x.dataType).filter(Boolean),
+    '采购流向',
+    '销售流向',
+  ])).map(value => ({ label: value, value }));
+
+  const summaryFieldMap: Record<string, keyof CollectionSummaryRecordDto> = {
+    DataType: 'dataType',
+    DrugName: 'drugName',
+    Specification: 'specification',
+    BatchNo: 'batchNo',
+    CompanyName: 'companyName',
+    ToCustomerName: 'toCustomerName',
+    TaxedUnitPrice: 'taxedUnitPrice',
+    Quantity: 'quantity',
+    DistributionDate: 'distributionDate',
+    Province: 'province',
+    ExpiryDate: 'expiryDate',
+  };
+
+  const renderSyncTarget = (dataType?: string) => {
+    if ((dataType || '').includes('采购')) return <Tag color="cyan">采购管理</Tag>;
+    if ((dataType || '').includes('销售')) return <Tag color="purple">销售管理</Tag>;
+    return <Tag>待识别</Tag>;
+  };
 
   const columns: ColumnsType<any> = [
     { title: '采集源', dataIndex: 'sourceName', width: 120, fixed: 'left' as const, render: (v: string) => <Tag color="blue">{v}</Tag> },
+    { title: '同步状态', dataIndex: 'syncStatus', width: 90, fixed: 'left' as const, render: (_: string, r: CollectionSummaryRecordDto) => (
+      r.targetEntityId ? <Tag color="green">已同步</Tag> : <Tag color="orange">待同步</Tag>
+    ) },
+    { title: '同步去向', dataIndex: 'dataType', width: 90, fixed: 'left' as const, render: renderSyncTarget },
     ...SUMMARY_COLUMNS.map(c => ({ title: c.title, width: c.width, ellipsis: true as const,
-      render: (_: any, r: any) => { const v = r._m?.[c.key]; if (v == null || v === '') return ''; return (c.key === 'DistributionDate' || c.key === 'ExpiryDate') ? formatSummaryDate(v) : String(v); },
+      render: (_: any, r: CollectionSummaryRecordDto) => {
+        const v = r[summaryFieldMap[c.key]];
+        if (v == null || v === '') return '';
+        return (c.key === 'DistributionDate' || c.key === 'ExpiryDate') ? formatSummaryDate(v) : String(v);
+      },
     })),
   ];
 
   return <div>
-    <div style={{ marginBottom: 16, display: 'flex', gap: 12, alignItems: 'center' }}>
-      <Select value={sourceFilter} allowClear placeholder="按采集源筛选" style={{ width: 200 }} onChange={(v) => setSourceFilter(v)} options={sources.map(s => ({ label: s.name, value: s.id }))} />
+    <div style={{ marginBottom: 16, display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
+      <Input.Search value={searchInput} allowClear placeholder="搜索药品/客户/批号/地区" style={{ width: 260 }}
+        onChange={e => setSearchInput(e.target.value)}
+        onSearch={v => { setSearch(v.trim()); resetToFirstPage(); }} />
+      <Select value={sourceFilter} allowClear placeholder="按采集源筛选" style={{ width: 200 }}
+        onChange={(v) => { setSourceFilter(v); resetToFirstPage(); }}
+        options={sources.map(s => ({ label: s.name, value: s.id }))} />
+      <Select value={dataTypeFilter} allowClear placeholder="按数据类型筛选" style={{ width: 160 }}
+        onChange={(v) => { setDataTypeFilter(v); resetToFirstPage(); }}
+        options={dataTypeOptions} />
+      <DatePicker.RangePicker value={dateRange} onChange={(v) => { setDateRange(v); resetToFirstPage(); }} />
       <Button icon={<ReloadOutlined />} onClick={load}>刷新</Button>
-      <Button type="primary" loading={syncing} onClick={async () => {
+      <Button icon={<ThunderboltOutlined />} loading={syncing} onClick={async () => {
         setSyncing(true);
         try {
-          const r = await dcApi.syncSummary(sourceFilter);
-          message.success(`同步完成：药品 ${r.createdDrugs} 个，客户 ${r.createdCustomers} 个，下游流转 ${r.createdDistributionRecords} 条，跳过 ${r.skippedRecords} 条`);
+          const result = await dcApi.syncSummary(sourceFilter);
+          message.success(`重新同步完成：业务流向 ${result.createdDistributionRecords} 条，跳过 ${result.skippedRecords} 条`);
+          await loadSources();
+          load();
         } catch (e: any) {
-          message.error(e?.message || '同步失败');
+          message.error(e?.message || '重新同步失败');
         } finally {
           setSyncing(false);
-          load();
         }
-      }}>同步到业务数据</Button>
-      <Popconfirm title="清空后数据从汇总移除，可在采集数据管理中重新提交" onConfirm={async () => { await dcApi.clearSummary(); load(); message.success('已清空'); }}>
+      }}>重新同步</Button>
+      <Tag color="processing">业务数据实时同步</Tag>
+      <Popconfirm title="清空后会从汇总移除，并撤销由采集汇总同步出的业务流向记录" onConfirm={async () => { await dcApi.clearSummary(); resetToFirstPage(); await loadSources(); load(); message.success('已清空'); }}>
         <Button danger>清空</Button>
       </Popconfirm>
-      <Tag>{data.length} 条</Tag></div>
-    <Table columns={columns} dataSource={rows} rowKey="id" loading={loading} scroll={{ x: 1600 }} size="small"
-      pagination={{ defaultPageSize: 20, showTotal: (t: number) => `共 ${t} 条`, showSizeChanger: true }} />
+      <Tag>{total} 条</Tag></div>
+    <Table columns={columns} dataSource={data} rowKey="id" loading={loading} scroll={{ x: 1800 }} size="small"
+      pagination={{
+        current: page + 1,
+        pageSize,
+        total,
+        showTotal: (t: number) => `共 ${t} 条`,
+        showSizeChanger: true,
+        onChange: (nextPage, nextSize) => {
+          setPage(nextPage - 1);
+          setPageSize(nextSize);
+        },
+      }} />
   </div>;
 }

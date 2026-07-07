@@ -1,9 +1,10 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
-import { Table, Button, Space, Input, Empty, Tag, Popconfirm, message, Tooltip } from 'antd';
-import { SearchOutlined, ApartmentOutlined, FullscreenOutlined, ZoomInOutlined, ZoomOutOutlined } from '@ant-design/icons';
+import { Table, Button, Space, Input, Empty, Tag, message, Tooltip } from 'antd';
+import { ApartmentOutlined, DeleteOutlined, FullscreenOutlined, SearchOutlined, ZoomInOutlined, ZoomOutOutlined } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
 import apiClient from '../../api/client';
 import { getDistribution, deleteDistribution } from '../../api/distribution';
+import RowActions from '../../components/RowActions';
 import type { ApiResponse, DistributionRecordDto } from '../../types';
 
 // WPF 布局常量
@@ -93,8 +94,10 @@ export default function DistributionPage() {
     { title: '批号', dataIndex: 'batchNo', width: 110 }, { title: '来源', dataIndex: 'fromCustomerName', width: 140 },
     { title: '去向', dataIndex: 'toCustomerName', width: 140 }, { title: '数量', dataIndex: 'quantity', width: 70 },
     { title: '日期', dataIndex: 'distributionDate', width: 100, render: (v: string) => v ? v.substring(0, 10) : '-' },
-    { title: '操作', width: 80, render: (_, r) => (
-        <Popconfirm title="确定删除？" onConfirm={() => handleDelete(r.id)}><Button size="small" danger>删除</Button></Popconfirm>),
+    { title: '操作', width: 64, render: (_, r) => (
+        <RowActions actions={[
+          { key: 'delete', label: '删除', icon: <DeleteOutlined />, tone: 'danger', confirmTitle: '确定删除？', onClick: () => handleDelete(r.id) },
+        ]} />),
     },
   ];
 
@@ -302,7 +305,6 @@ export default function DistributionPage() {
 
   return (
     <div>
-      <h2 style={{ marginBottom: 16 }}>🔍 流向查询</h2>
       <Space wrap style={{ marginBottom: 16 }}>
         <Input placeholder="批号" value={searchBatch} onChange={e => setSearchBatch(e.target.value)}
           onPressEnter={handleSearch} style={{ width: 160 }} allowClear />

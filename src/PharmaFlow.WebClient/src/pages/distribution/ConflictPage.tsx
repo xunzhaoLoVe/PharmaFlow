@@ -31,7 +31,6 @@ export default function ConflictPage() {
 
   return (
     <div>
-      <h2 style={{ marginBottom: 16 }}>🚨 串货预警</h2>
       <Space style={{ marginBottom: 16 }}>
         <Input placeholder="按批号筛选" onPressEnter={(e) => load((e.target as HTMLInputElement).value)}
           prefix={<SearchOutlined />} style={{ width: 200 }} allowClear />

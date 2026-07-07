@@ -19,6 +19,10 @@ public interface ICollectionService
     Task SubmitTaskAsync(Guid id);
     Task UnsubmitTaskAsync(Guid id);
     Task ClearSummaryAsync();
+    Task<IReadOnlyList<DropdownItem>> GetSummarySourceDropdownAsync();
+    Task<PagedResult<CollectionSummaryRecordDto>> GetSummaryPagedAsync(int pageIndex, int pageSize,
+        Guid? sourceId = null, string? search = null, string? dataType = null,
+        DateTime? dateFrom = null, DateTime? dateTo = null);
     Task<SyncSummaryResultDto> SyncSummaryAsync(Guid? sourceId = null);
     Task<ReapplyTransformResultDto> ReapplyTransformAsync(Guid sourceId);
 

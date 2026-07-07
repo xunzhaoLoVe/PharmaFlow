@@ -65,7 +65,6 @@ export default function InventoryPage() {
 
   return (
     <div>
-      <h2 style={{ marginBottom: 16 }}>📦 库存管理（经销商）</h2>
       <Tabs activeKey={tab} onChange={setTab} items={[
         { key: 'all', label: `全部 (${totalCount})` },
         { key: 'lowStock', label: `低库存预警 (${lowStockCount})` },

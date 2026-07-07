@@ -1,9 +1,10 @@
 import { useState, useEffect, useCallback } from 'react';
-import { Table, Button, Modal, Form, Input, Select, Switch, Space, Tag, message, Popconfirm } from 'antd';
-import { PlusOutlined, ReloadOutlined } from '@ant-design/icons';
+import { Table, Button, Modal, Form, Input, Select, Switch, Space, Tag, message } from 'antd';
+import { DeleteOutlined, EditOutlined, PlusOutlined, ReloadOutlined } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
 import { useAuthStore } from '../../store/authStore';
 import * as ruleApi from '../../api/importrules';
+import RowActions from '../../components/RowActions';
 import type { ImportRuleDto, ModuleRuleConfigDto } from '../../api/importrules';
 
 const MODULE_OPTIONS = [
@@ -63,14 +64,12 @@ export default function ImportRulePage() {
       )) || '-',
     },
     ...(canWrite ? [{
-      title: '操作', width: 120,
+      title: '操作', width: 110,
       render: (_: any, r: ImportRuleDto) => (
-        <Space>
-          <Button size="small" onClick={() => handleEdit(r)}>编辑</Button>
-          <Popconfirm title="确定删除？" onConfirm={() => handleDelete(r.id)}>
-            <Button size="small" danger>删除</Button>
-          </Popconfirm>
-        </Space>
+        <RowActions actions={[
+          { key: 'edit', label: '编辑', icon: <EditOutlined />, tone: 'primary', onClick: () => handleEdit(r) },
+          { key: 'delete', label: '删除', icon: <DeleteOutlined />, tone: 'danger', confirmTitle: '确定删除？', onClick: () => handleDelete(r.id) },
+        ]} />
       ),
     }] : []),
   ];

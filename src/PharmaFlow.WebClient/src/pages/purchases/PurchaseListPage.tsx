@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback, useMemo } from 'react';
-import { Table, Button, Space, Input, Modal, Form, Select, message, Popconfirm, Upload } from 'antd';
+import { Table, Button, Space, Input, Modal, Form, Select, message, Upload } from 'antd';
 import { PlusOutlined, UploadOutlined, DeleteOutlined, SearchOutlined } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
 import dayjs from 'dayjs';
@@ -9,6 +9,7 @@ import apiClient from '../../api/client';
 import { getDrugDropdown } from '../../api/drugs';
 import { getCustomerDropdown } from '../../api/customers';
 import { getDistribution, recordDownstream, deleteDistribution } from '../../api/distribution';
+import RowActions from '../../components/RowActions';
 import type { DistributionRecordDto, DropdownItem } from '../../types';
 
 export default function PurchaseListPage() {
@@ -170,14 +171,15 @@ export default function PurchaseListPage() {
       render: (v: string) => v ? v.substring(0, 10) : '-',
     },
     { title: '采购经销商', dataIndex: 'toCustomerName', width: 180 },
-    { title: '操作', width: 80, render: (_, r) => (
-        <Popconfirm title="确定删除？" onConfirm={() => handleDelete(r.id)}><Button size="small" danger>删除</Button></Popconfirm>),
+    { title: '操作', width: 64, render: (_, r) => (
+        <RowActions actions={[
+          { key: 'delete', label: '删除', icon: <DeleteOutlined />, tone: 'danger', confirmTitle: '确定删除？', onClick: () => handleDelete(r.id) },
+        ]} />),
     },
   ];
 
   return (
     <div>
-      <h2 style={{ marginBottom: 16 }}>📥 采购管理（本司出货至一级经销商）</h2>
       <Space wrap style={{ marginBottom: 16 }}>
         <Input placeholder="搜索采购经销商" value={searchCustomer} onChange={e => setSearchCustomer(e.target.value)}
           onPressEnter={() => setSqCustomer(searchCustomer)} prefix={<SearchOutlined />} style={{ width: 200 }} allowClear />

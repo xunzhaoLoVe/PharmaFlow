@@ -1,8 +1,9 @@
 import { useEffect, useState } from 'react';
-import { Table, Button, Modal, Form, Input, Select, message, Popconfirm, Tag, Space } from 'antd';
-import { PlusOutlined } from '@ant-design/icons';
+import { Table, Button, Modal, Form, Input, Select, message, Tag } from 'antd';
+import { CheckCircleOutlined, DeleteOutlined, EditOutlined, KeyOutlined, PlusOutlined, StopOutlined } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
 import apiClient from '../../api/client';
+import RowActions from '../../components/RowActions';
 import type { ApiResponse } from '../../types';
 
 interface UserDto {
@@ -94,9 +95,9 @@ export default function UserListPage() {
     { title: '最近登录', dataIndex: 'lastLoginTime', width: 155,
       render: (v: string) => v ? new Date(v).toLocaleString() : '-',
     },
-    { title: '操作', width: 280, render: (_, r) => (
-      <Space size="small">
-        <Button size="small" onClick={() => {
+    { title: '操作', width: 210, render: (_, r) => (
+      <RowActions actions={[
+        { key: 'edit', label: '编辑', icon: <EditOutlined />, tone: 'primary', onClick: () => {
           setEditingUser(r);
           editForm.setFieldsValue({
             displayName: r.displayName,
@@ -106,23 +107,16 @@ export default function UserListPage() {
             isActive: r.isActive,
           });
           setEditModalOpen(true);
-        }}>编辑</Button>
-        <Button size="small" onClick={() => toggleActive(r.id)}>
-          {r.isActive ? '禁用' : '启用'}
-        </Button>
-        <Popconfirm title="确定重置密码？" onConfirm={() => resetPassword(r.id)}>
-          <Button size="small">重置密码</Button>
-        </Popconfirm>
-        <Popconfirm title="确定删除该用户？" onConfirm={() => handleDelete(r.id)}>
-          <Button size="small" danger>删除</Button>
-        </Popconfirm>
-      </Space>
+        } },
+        { key: 'toggle', label: r.isActive ? '禁用' : '启用', icon: r.isActive ? <StopOutlined /> : <CheckCircleOutlined />, onClick: () => toggleActive(r.id) },
+        { key: 'reset', label: '重置密码', icon: <KeyOutlined />, confirmTitle: '确定重置密码？', onClick: () => resetPassword(r.id) },
+        { key: 'delete', label: '删除', icon: <DeleteOutlined />, tone: 'danger', confirmTitle: '确定删除该用户？', onClick: () => handleDelete(r.id) },
+      ]} />
     )},
   ];
 
   return (
     <div>
-      <h2 style={{ marginBottom: 16 }}>👥 用户管理</h2>
       <Button type="primary" icon={<PlusOutlined />} onClick={() => { form.resetFields(); setModalOpen(true); }}
         style={{ marginBottom: 16 }}>新增用户</Button>
       <Table rowKey="id" columns={columns} dataSource={data} loading={loading}

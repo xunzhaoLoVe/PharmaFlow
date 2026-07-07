@@ -1,10 +1,11 @@
 import { useEffect, useState, useCallback } from 'react';
-import { Table, Button, Space, Input, Modal, Form, message, Popconfirm, Upload } from 'antd';
-import { PlusOutlined, SearchOutlined, UploadOutlined } from '@ant-design/icons';
+import { Table, Button, Space, Input, Modal, Form, message, Upload } from 'antd';
+import { DeleteOutlined, EditOutlined, PlusOutlined, SearchOutlined, UploadOutlined } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
 import * as XLSX from 'xlsx';
 import { useAuthStore } from '../../store/authStore';
 import { getDrugs, createDrug, updateDrug, deleteDrug } from '../../api/drugs';
+import RowActions from '../../components/RowActions';
 import type { DrugDto } from '../../types';
 
 export default function DrugListPage() {
@@ -97,15 +98,16 @@ export default function DrugListPage() {
       filters: [...new Set((filteredData.length > 0 ? filteredData : data).map(d => d.specification).filter(Boolean))].sort().map(s => ({ text: s, value: s })),
       onFilter: (v, r) => (r.specification || '') === (v as string),
     },
-    ...(canWrite ? [{ title: '操作', width: 150, render: (_: any, r: DrugDto) => (
-        <Space><Button size="small" onClick={() => handleEdit(r)}>编辑</Button>
-          <Popconfirm title="确定删除？" onConfirm={() => handleDelete(r.id)}><Button size="small" danger>删除</Button></Popconfirm></Space>),
+    ...(canWrite ? [{ title: '操作', width: 110, render: (_: any, r: DrugDto) => (
+        <RowActions actions={[
+          { key: 'edit', label: '编辑', icon: <EditOutlined />, tone: 'primary', onClick: () => handleEdit(r) },
+          { key: 'delete', label: '删除', icon: <DeleteOutlined />, tone: 'danger', confirmTitle: '确定删除？', onClick: () => handleDelete(r.id) },
+        ]} />),
     }] : []),
   ];
 
   return (
     <div>
-      <h2 style={{ marginBottom: 16 }}>💊 药品管理</h2>
       <Space wrap style={{ marginBottom: 16 }}>
         <Input placeholder="药品名称" value={search} onChange={e => setSearch(e.target.value)}
           onPressEnter={handleSearch} prefix={<SearchOutlined />} style={{ width: 220 }} allowClear />

@@ -120,6 +120,24 @@ public class CollectionController : ControllerBase
         return Ok(ApiResponse<CollectionTaskDto>.Ok(result));
     }
 
+    [HttpGet("summary/sources")]
+    public async Task<ActionResult<ApiResponse<IReadOnlyList<DropdownItem>>>> GetSummarySources()
+    {
+        var result = await _collectionService.GetSummarySourceDropdownAsync();
+        return Ok(ApiResponse<IReadOnlyList<DropdownItem>>.Ok(result));
+    }
+
+    [HttpGet("summary")]
+    public async Task<ActionResult<ApiResponse<PagedResult<CollectionSummaryRecordDto>>>> GetSummary(
+        [FromQuery] int page = 0, [FromQuery] int size = 20,
+        [FromQuery] Guid? sourceId = null, [FromQuery] string? search = null,
+        [FromQuery] string? dataType = null,
+        [FromQuery] DateTime? dateFrom = null, [FromQuery] DateTime? dateTo = null)
+    {
+        var result = await _collectionService.GetSummaryPagedAsync(page, size, sourceId, search, dataType, dateFrom, dateTo);
+        return Ok(ApiResponse<PagedResult<CollectionSummaryRecordDto>>.Ok(result));
+    }
+
     [HttpPost("summary/clear")]
     public async Task<ActionResult<ApiResponse>> ClearSummary()
     {

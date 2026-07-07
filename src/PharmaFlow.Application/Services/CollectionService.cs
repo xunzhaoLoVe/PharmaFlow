@@ -14,6 +14,43 @@ public class CollectionService : ICollectionService
     private readonly CollectionExecutionService _executionService;
     private readonly SmartDataCleaner _smartDataCleaner;
     private readonly ILogger<CollectionService> _logger;
+    private static readonly (string FullName, string[] Aliases)[] ProvinceAliases =
+    {
+        ("北京市", new[] { "北京" }),
+        ("天津市", new[] { "天津" }),
+        ("上海市", new[] { "上海" }),
+        ("重庆市", new[] { "重庆" }),
+        ("河北省", new[] { "河北" }),
+        ("山西省", new[] { "山西" }),
+        ("辽宁省", new[] { "辽宁" }),
+        ("吉林省", new[] { "吉林" }),
+        ("黑龙江省", new[] { "黑龙江" }),
+        ("江苏省", new[] { "江苏" }),
+        ("浙江省", new[] { "浙江" }),
+        ("安徽省", new[] { "安徽" }),
+        ("福建省", new[] { "福建" }),
+        ("江西省", new[] { "江西" }),
+        ("山东省", new[] { "山东" }),
+        ("河南省", new[] { "河南" }),
+        ("湖北省", new[] { "湖北" }),
+        ("湖南省", new[] { "湖南" }),
+        ("广东省", new[] { "广东" }),
+        ("海南省", new[] { "海南" }),
+        ("四川省", new[] { "四川" }),
+        ("贵州省", new[] { "贵州" }),
+        ("云南省", new[] { "云南" }),
+        ("陕西省", new[] { "陕西" }),
+        ("甘肃省", new[] { "甘肃" }),
+        ("青海省", new[] { "青海" }),
+        ("台湾省", new[] { "台湾" }),
+        ("内蒙古自治区", new[] { "内蒙古" }),
+        ("广西壮族自治区", new[] { "广西" }),
+        ("西藏自治区", new[] { "西藏" }),
+        ("宁夏回族自治区", new[] { "宁夏" }),
+        ("新疆维吾尔自治区", new[] { "新疆" }),
+        ("香港特别行政区", new[] { "香港" }),
+        ("澳门特别行政区", new[] { "澳门" }),
+    };
 
     public CollectionService(
         AppDbContext db,
@@ -114,6 +151,7 @@ public class CollectionService : ICollectionService
         var source = await _db.CollectionSources.FindAsync(id);
         if (source != null)
         {
+            await RemoveBusinessDataForSubmittedRecordsAsync(sourceId: id);
             source.IsDeleted = true;
             source.UpdatedAt = DateTime.UtcNow;
             await _db.SaveChangesAsync();
@@ -161,33 +199,145 @@ public class CollectionService : ICollectionService
 
     public async Task ClearSummaryAsync()
     {
+        await RemoveBusinessDataForSubmittedRecordsAsync();
         var tasks = await _db.CollectionTasks.Where(t => t.IsSubmitted).ToListAsync();
         foreach (var t in tasks) t.IsSubmitted = false;
         await _db.SaveChangesAsync();
     }
 
-    public async Task<SyncSummaryResultDto> SyncSummaryAsync(Guid? sourceId = null)
+    public async Task<IReadOnlyList<DropdownItem>> GetSummarySourceDropdownAsync()
     {
+        var records = await _db.CollectionRecords
+            .Include(r => r.Task)
+            .Include(r => r.Source)
+            .Where(r => r.Task.IsSubmitted && !r.Source.IsDeleted)
+            .Select(r => new
+            {
+                r.SourceId,
+                SourceName = r.Source.Name,
+                r.CleanedDataJson,
+            })
+            .ToListAsync();
+
+        return records
+            .Where(r => !string.IsNullOrWhiteSpace(r.CleanedDataJson) && !IsExcludedFromSummary(r.CleanedDataJson))
+            .GroupBy(r => new { r.SourceId, r.SourceName })
+            .OrderBy(g => g.Key.SourceName)
+            .Select(g => new DropdownItem { Id = g.Key.SourceId, Name = g.Key.SourceName })
+            .ToList();
+    }
+
+    public async Task<PagedResult<CollectionSummaryRecordDto>> GetSummaryPagedAsync(int pageIndex, int pageSize,
+        Guid? sourceId = null, string? search = null, string? dataType = null,
+        DateTime? dateFrom = null, DateTime? dateTo = null)
+    {
+        pageIndex = Math.Max(0, pageIndex);
+        pageSize = Math.Clamp(pageSize, 1, 500);
+
         var query = _db.CollectionRecords
             .Include(r => r.Task)
-            .Where(r => r.Task.IsSubmitted);
+            .Include(r => r.Source)
+            .Where(r => r.Task.IsSubmitted)
+            .AsQueryable();
 
         if (sourceId.HasValue)
             query = query.Where(r => r.SourceId == sourceId.Value);
+
+        var records = await query.OrderByDescending(r => r.CreatedAt).ToListAsync();
+        var seenRawRows = new HashSet<string>(StringComparer.Ordinal);
+        var rows = new List<CollectionSummaryRecordDto>();
+
+        foreach (var record in records)
+        {
+            if (!seenRawRows.Add(record.RawDataJson))
+                continue;
+
+            var row = MapSummaryRecord(record);
+            if (row == null)
+                continue;
+
+            rows.Add(row);
+        }
+
+        if (!string.IsNullOrWhiteSpace(search))
+        {
+            var keyword = search.Trim();
+            rows = rows.Where(r => SummaryRowContains(r, keyword)).ToList();
+        }
+
+        if (!string.IsNullOrWhiteSpace(dataType))
+        {
+            var filter = dataType.Trim();
+            rows = rows
+                .Where(r => string.Equals(r.DataType, filter, StringComparison.OrdinalIgnoreCase))
+                .ToList();
+        }
+
+        if (dateFrom.HasValue)
+        {
+            var from = dateFrom.Value.Date;
+            rows = rows
+                .Where(r => TryParseDate(r.DistributionDate, out var date) && date >= from)
+                .ToList();
+        }
+
+        if (dateTo.HasValue)
+        {
+            var toExclusive = dateTo.Value.Date.AddDays(1);
+            rows = rows
+                .Where(r => TryParseDate(r.DistributionDate, out var date) && date < toExclusive)
+                .ToList();
+        }
+
+        var total = rows.Count;
+        var items = rows.Skip(pageIndex * pageSize).Take(pageSize).ToList();
+
+        return new PagedResult<CollectionSummaryRecordDto>
+        {
+            Items = items,
+            TotalCount = total,
+            PageIndex = pageIndex,
+            PageSize = pageSize,
+        };
+    }
+
+    public async Task<SyncSummaryResultDto> SyncSummaryAsync(Guid? sourceId = null)
+    {
+        await RemoveBusinessDataForSubmittedRecordsAsync(sourceId: sourceId);
+        await _db.SaveChangesAsync();
+        return await SyncSubmittedRecordsAsync(sourceId: sourceId);
+    }
+
+    private async Task<SyncSummaryResultDto> SyncSubmittedRecordsAsync(Guid? sourceId = null, Guid? taskId = null)
+    {
+        var query = _db.CollectionRecords
+            .Include(r => r.Task)
+            .Include(r => r.Source)
+            .Where(r => r.Task.IsSubmitted)
+            .AsQueryable();
+
+        if (sourceId.HasValue)
+            query = query.Where(r => r.SourceId == sourceId.Value);
+        if (taskId.HasValue)
+            query = query.Where(r => r.TaskId == taskId.Value);
 
         var records = await query.OrderBy(r => r.CreatedAt).ToListAsync();
         var result = new SyncSummaryResultDto { TotalRecords = records.Count };
 
         var drugs = await _db.Drugs.Where(d => !d.IsDeleted).ToListAsync();
         var customers = await _db.Customers.Where(c => !c.IsDeleted).ToListAsync();
+        var suppliers = await _db.Suppliers.Where(s => !s.IsDeleted).ToListAsync();
         var drugCodes = new HashSet<string>(await _db.Drugs.IgnoreQueryFilters().Select(d => d.Code).ToListAsync(), StringComparer.OrdinalIgnoreCase);
         var customerCodes = new HashSet<string>(await _db.Customers.IgnoreQueryFilters().Select(c => c.Code).ToListAsync(), StringComparer.OrdinalIgnoreCase);
+        var supplierCodes = new HashSet<string>(await _db.Suppliers.IgnoreQueryFilters().Select(s => s.Code).ToListAsync(), StringComparer.OrdinalIgnoreCase);
 
         var existingDistributions = await _db.DistributionRecords
             .Select(d => new
             {
+                d.Id,
                 d.DrugId,
                 d.BatchNo,
+                d.SupplierId,
                 d.FromCustomerId,
                 d.ToCustomerId,
                 d.Quantity,
@@ -195,9 +345,9 @@ public class CollectionService : ICollectionService
                 d.DistributionDate
             })
             .ToListAsync();
-        var distributionKeys = existingDistributions
-            .Select(d => DistributionSyncKey(d.DrugId, d.BatchNo, d.FromCustomerId, d.ToCustomerId, d.Quantity, d.DeliveryOrderNo, d.DistributionDate))
-            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var distributionByKey = existingDistributions
+            .GroupBy(d => DistributionSyncKey(d.DrugId, d.BatchNo, d.SupplierId, d.FromCustomerId, d.ToCustomerId, d.Quantity, d.DeliveryOrderNo, d.DistributionDate), StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(g => g.Key, g => g.First().Id, StringComparer.OrdinalIgnoreCase);
 
         foreach (var record in records)
         {
@@ -224,6 +374,8 @@ public class CollectionService : ICollectionService
                 if (_db.Entry(drug).State == EntityState.Detached)
                     _db.Drugs.Add(drug);
 
+                var dataType = FirstNonEmpty(GetString(root, "DataType"), GetSourceType(record.Source?.TransformConfig));
+                var isPurchaseFlow = IsPurchaseFlow(dataType);
                 var fromName = FirstNonEmpty(
                     GetString(root, "FromCustomerName"),
                     GetString(root, "CompanyName"),
@@ -234,9 +386,16 @@ public class CollectionService : ICollectionService
                     GetString(root, "CustomerName"),
                     GetString(root, "CustomerShortName"));
 
+                Supplier? supplier = null;
                 Customer? fromCustomer = null;
                 Customer? toCustomer = null;
-                if (!string.IsNullOrWhiteSpace(fromName))
+                if (isPurchaseFlow)
+                {
+                    supplier = FindOrCreateSupplier(root, FirstNonEmpty(fromName, "江苏神龙药业有限公司"), suppliers, supplierCodes);
+                    if (_db.Entry(supplier).State == EntityState.Detached)
+                        _db.Suppliers.Add(supplier);
+                }
+                else if (!string.IsNullOrWhiteSpace(fromName))
                 {
                     fromCustomer = FindOrCreateSourceDealer(root, fromName, null, customers, customerCodes, result);
                     if (_db.Entry(fromCustomer).State == EntityState.Detached)
@@ -244,22 +403,23 @@ public class CollectionService : ICollectionService
                 }
                 if (!string.IsNullOrWhiteSpace(toName))
                 {
-                    toCustomer = FindOrCreateDestinationCustomer(root, toName, GetString(root, "CustomerCode"), customers, customerCodes, result);
+                    toCustomer = isPurchaseFlow
+                        ? FindOrCreatePurchaseDealer(root, toName, GetString(root, "CustomerCode"), customers, customerCodes, result)
+                        : FindOrCreateDestinationCustomer(root, toName, GetString(root, "CustomerCode"), customers, customerCodes, result);
                     if (_db.Entry(toCustomer).State == EntityState.Detached)
                         _db.Customers.Add(toCustomer);
                 }
 
-                if (fromCustomer == null || toCustomer == null)
+                if ((!isPurchaseFlow && fromCustomer == null) || toCustomer == null || (isPurchaseFlow && supplier == null))
                 {
                     result.SkippedRecords++;
                     continue;
                 }
 
                 var batchNo = FirstNonEmpty(GetString(root, "BatchNo"), "-");
-                var quantity = FirstNonZero(
-                    GetDecimal(root, "SalesQuantity"),
-                    GetDecimal(root, "Quantity"),
-                    GetDecimal(root, "PurchaseQuantity"));
+                var quantity = isPurchaseFlow
+                    ? FirstNonZero(GetDecimal(root, "PurchaseQuantity"), GetDecimal(root, "Quantity"), GetDecimal(root, "SalesQuantity"))
+                    : FirstNonZero(GetDecimal(root, "SalesQuantity"), GetDecimal(root, "Quantity"), GetDecimal(root, "PurchaseQuantity"));
                 if (quantity == 0)
                 {
                     result.SkippedRecords++;
@@ -268,18 +428,22 @@ public class CollectionService : ICollectionService
 
                 var distributionDate = GetDateTime(root, "DistributionDate") ?? DateTime.UtcNow;
                 var deliveryOrderNo = GetString(root, "DeliveryOrderNo");
-                var key = DistributionSyncKey(drug.Id, batchNo, fromCustomer.Id, toCustomer.Id, quantity, deliveryOrderNo, distributionDate);
-                if (!distributionKeys.Add(key))
+                var key = DistributionSyncKey(drug.Id, batchNo, supplier?.Id, fromCustomer?.Id, toCustomer.Id, quantity, deliveryOrderNo, distributionDate);
+                if (distributionByKey.TryGetValue(key, out var existingDistributionId))
                 {
+                    record.TargetEntityType = "DistributionRecord";
+                    record.TargetEntityId = existingDistributionId;
+                    record.UpdatedAt = DateTime.UtcNow;
                     result.SkippedRecords++;
                     continue;
                 }
 
-                _db.DistributionRecords.Add(new DistributionRecord
+                var distributionRecord = new DistributionRecord
                 {
                     DrugId = drug.Id,
                     BatchNo = batchNo,
-                    FromCustomerId = fromCustomer.Id,
+                    SupplierId = supplier?.Id,
+                    FromCustomerId = isPurchaseFlow ? null : fromCustomer?.Id,
                     ToCustomerId = toCustomer.Id,
                     Quantity = quantity,
                     SalesPerson = FirstNonEmpty(GetString(root, "SalesPerson"), GetString(root, "Operator")),
@@ -288,8 +452,13 @@ public class CollectionService : ICollectionService
                     DistributionDate = distributionDate,
                     DistributionDateDisplay = FormatDateOnly(distributionDate),
                     Operator = "采集汇总同步",
-                    Province = GetString(root, "Province"),
-                });
+                    Province = GetProvince(root),
+                };
+                _db.DistributionRecords.Add(distributionRecord);
+                distributionByKey[key] = distributionRecord.Id;
+                record.TargetEntityType = "DistributionRecord";
+                record.TargetEntityId = distributionRecord.Id;
+                record.UpdatedAt = DateTime.UtcNow;
                 result.CreatedDistributionRecords++;
             }
             catch
@@ -300,6 +469,38 @@ public class CollectionService : ICollectionService
 
         await _db.SaveChangesAsync();
         return result;
+    }
+
+    private async Task RemoveBusinessDataForSubmittedRecordsAsync(Guid? sourceId = null, Guid? taskId = null)
+    {
+        var query = _db.CollectionRecords
+            .Include(r => r.Task)
+            .Where(r => r.Task.IsSubmitted && r.TargetEntityType == "DistributionRecord" && r.TargetEntityId.HasValue)
+            .AsQueryable();
+
+        if (sourceId.HasValue)
+            query = query.Where(r => r.SourceId == sourceId.Value);
+        if (taskId.HasValue)
+            query = query.Where(r => r.TaskId == taskId.Value);
+
+        var records = await query.ToListAsync();
+        if (records.Count == 0)
+            return;
+
+        var distributionIds = records
+            .Select(r => r.TargetEntityId!.Value)
+            .Distinct()
+            .ToList();
+        var distributions = await _db.DistributionRecords
+            .Where(d => distributionIds.Contains(d.Id))
+            .ToListAsync();
+
+        _db.DistributionRecords.RemoveRange(distributions);
+        foreach (var record in records)
+        {
+            record.TargetEntityId = null;
+            record.UpdatedAt = DateTime.UtcNow;
+        }
     }
 
     public async Task SubmitTaskAsync(Guid id)
@@ -318,12 +519,20 @@ public class CollectionService : ICollectionService
         await ReapplyTransformForRecordsAsync(task.Source, records);
         task.IsSubmitted = true;
         await _db.SaveChangesAsync();
+        await RemoveBusinessDataForSubmittedRecordsAsync(taskId: id);
+        await _db.SaveChangesAsync();
+        await SyncSubmittedRecordsAsync(taskId: id);
     }
 
     public async Task UnsubmitTaskAsync(Guid id)
     {
         var task = await _db.CollectionTasks.FindAsync(id);
-        if (task != null) { task.IsSubmitted = false; await _db.SaveChangesAsync(); }
+        if (task != null)
+        {
+            await RemoveBusinessDataForSubmittedRecordsAsync(taskId: id);
+            task.IsSubmitted = false;
+            await _db.SaveChangesAsync();
+        }
     }
 
     public async Task<ReapplyTransformResultDto> ReapplyTransformAsync(Guid sourceId)
@@ -340,6 +549,13 @@ public class CollectionService : ICollectionService
         var (updated, errors) = await ReapplyTransformForRecordsAsync(source, records);
 
         await _db.SaveChangesAsync();
+        if (await _db.CollectionTasks.AnyAsync(t => t.SourceId == sourceId && t.IsSubmitted))
+        {
+            await RemoveBusinessDataForSubmittedRecordsAsync(sourceId: sourceId);
+            await _db.SaveChangesAsync();
+            await SyncSubmittedRecordsAsync(sourceId: sourceId);
+        }
+
         return new ReapplyTransformResultDto
         {
             SourceId = sourceId,
@@ -399,6 +615,7 @@ public class CollectionService : ICollectionService
 
     public async Task DeleteTaskAsync(Guid id)
     {
+        await RemoveBusinessDataForSubmittedRecordsAsync(taskId: id);
         var records = await _db.CollectionRecords.Where(r => r.TaskId == id).ToListAsync();
         _db.CollectionRecords.RemoveRange(records);
         var task = await _db.CollectionTasks.FindAsync(id);
@@ -464,6 +681,9 @@ public class CollectionService : ICollectionService
         }
 
         await _db.SaveChangesAsync();
+        if (task.Status == CollectionTaskStatus.已完成 && task.IsSubmitted)
+            await SyncSubmittedRecordsAsync(taskId: task.Id);
+
         task.Source = source;
         return MapTaskToDto(task);
     }
@@ -605,6 +825,87 @@ public class CollectionService : ICollectionService
         return imported;
     }
 
+    private static CollectionSummaryRecordDto? MapSummaryRecord(CollectionRecord record)
+    {
+        if (string.IsNullOrWhiteSpace(record.CleanedDataJson) || IsExcludedFromSummary(record.CleanedDataJson))
+            return null;
+
+        try
+        {
+            using var doc = JsonDocument.Parse(record.CleanedDataJson);
+            var root = doc.RootElement;
+            var distributionDate = GetDateTime(root, "DistributionDate");
+            var expiryDate = GetDateTime(root, "ExpiryDate");
+            var sourceType = GetSourceType(record.Source?.TransformConfig);
+            var cleanedDataType = GetString(root, "DataType");
+            var quantity = FirstNonZero(
+                GetDecimal(root, "SalesQuantity"),
+                GetDecimal(root, "Quantity"),
+                GetDecimal(root, "PurchaseQuantity"));
+
+            return new CollectionSummaryRecordDto
+            {
+                Id = record.Id,
+                TaskId = record.TaskId,
+                SourceId = record.SourceId,
+                SourceName = record.Source?.Name ?? "",
+                DataType = FirstNonEmpty(cleanedDataType, sourceType),
+                DrugName = GetString(root, "DrugName"),
+                Specification = GetString(root, "Specification"),
+                BatchNo = GetString(root, "BatchNo"),
+                CompanyName = GetString(root, "CompanyName", "FromCustomerName", "SupplierShortName", "OriginalSupplierShortName"),
+                ToCustomerName = GetString(root, "ToCustomerName", "CustomerName", "CustomerShortName"),
+                TaxedUnitPrice = GetDecimal(root, "TaxedUnitPrice"),
+                Quantity = quantity,
+                DistributionDate = distributionDate.HasValue ? FormatDateOnly(distributionDate.Value) : GetString(root, "DistributionDate"),
+                Province = GetProvince(root),
+                ExpiryDate = expiryDate.HasValue ? FormatDateOnly(expiryDate.Value) : GetString(root, "ExpiryDate"),
+                TargetEntityId = record.TargetEntityId,
+                SyncStatus = record.TargetEntityId.HasValue ? "Synced" : "Pending",
+                CreatedAt = record.CreatedAt,
+            };
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static bool SummaryRowContains(CollectionSummaryRecordDto row, string keyword)
+    {
+        var values = new[]
+        {
+            row.SourceName,
+            row.DataType,
+            row.DrugName,
+            row.Specification,
+            row.BatchNo,
+            row.CompanyName,
+            row.ToCustomerName,
+            row.Province,
+            row.DistributionDate,
+            row.ExpiryDate,
+            row.TaxedUnitPrice?.ToString(),
+            row.Quantity?.ToString(),
+        };
+
+        return values.Any(v => !string.IsNullOrWhiteSpace(v)
+            && v.Contains(keyword, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static string GetSourceType(string? transformConfig)
+    {
+        if (string.IsNullOrWhiteSpace(transformConfig)) return "";
+        try
+        {
+            using var doc = JsonDocument.Parse(transformConfig);
+            if (doc.RootElement.TryGetProperty("sourceType", out var sourceType))
+                return sourceType.GetString()?.Trim() ?? "";
+        }
+        catch { }
+        return "";
+    }
+
     private static bool IsExcludedFromSummary(string? cleanedDataJson)
     {
         if (string.IsNullOrWhiteSpace(cleanedDataJson)) return false;
@@ -643,12 +944,45 @@ public class CollectionService : ICollectionService
         return "";
     }
 
+    private static string GetProvince(JsonElement root)
+        => NormalizeProvinceName(GetString(root, "Province", "Area", "Region", "RegionName", "CustomerAddress", "Address"));
+
+    private static string NormalizeProvinceName(string? value)
+    {
+        var text = string.Concat((value ?? "").Where(c => !char.IsWhiteSpace(c))).Trim();
+        if (string.IsNullOrWhiteSpace(text) || text == "未知")
+            return "";
+
+        foreach (var (fullName, _) in ProvinceAliases)
+        {
+            if (text.Contains(fullName, StringComparison.OrdinalIgnoreCase))
+                return fullName;
+        }
+
+        foreach (var (fullName, aliases) in ProvinceAliases)
+        {
+            if (aliases.Any(alias => text.StartsWith(alias, StringComparison.OrdinalIgnoreCase)))
+                return fullName;
+        }
+
+        return text;
+    }
+
     private static decimal GetDecimal(JsonElement root, string name)
     {
         if (!root.TryGetProperty(name, out var value)) return 0m;
         if (value.ValueKind == JsonValueKind.Number && value.TryGetDecimal(out var number)) return number;
         if (value.ValueKind == JsonValueKind.String && decimal.TryParse(value.GetString(), out var parsed)) return parsed;
         return 0m;
+    }
+
+    private static bool TryParseDate(string? value, out DateTime date)
+    {
+        if (!string.IsNullOrWhiteSpace(value) && DateTime.TryParse(value, out date))
+            return true;
+
+        date = default;
+        return false;
     }
 
     private static DateTime? GetDateTime(JsonElement root, string name)
@@ -671,9 +1005,13 @@ public class CollectionService : ICollectionService
     private static decimal FirstNonZero(params decimal[] values)
         => values.FirstOrDefault(v => v != 0m);
 
+    private static bool IsPurchaseFlow(string dataType)
+        => dataType.Contains("采购", StringComparison.OrdinalIgnoreCase);
+
     private static string DistributionSyncKey(
         Guid drugId,
         string batchNo,
+        Guid? supplierId,
         Guid? fromCustomerId,
         Guid? toCustomerId,
         decimal quantity,
@@ -682,6 +1020,7 @@ public class CollectionService : ICollectionService
         => string.Join("|",
             drugId,
             batchNo.Trim(),
+            supplierId?.ToString() ?? "",
             fromCustomerId?.ToString() ?? "",
             toCustomerId?.ToString() ?? "",
             quantity.ToString("0.####"),
@@ -697,13 +1036,17 @@ public class CollectionService : ICollectionService
         SyncSummaryResultDto result)
     {
         var drugCode = GetString(root, "DrugCode");
-        var drug = !string.IsNullOrWhiteSpace(drugCode)
-            ? drugs.FirstOrDefault(d => d.Code.Equals(drugCode, StringComparison.OrdinalIgnoreCase))
-            : null;
-        drug ??= drugs.FirstOrDefault(d =>
-            d.Name.Equals(drugName, StringComparison.OrdinalIgnoreCase)
-            && string.Equals(d.Specification ?? "", specification ?? "", StringComparison.OrdinalIgnoreCase));
-        drug ??= drugs.FirstOrDefault(d => d.Name.Equals(drugName, StringComparison.OrdinalIgnoreCase));
+        var drug = drugs.FirstOrDefault(d => SameDrugIdentity(d, drugName, specification));
+
+        if (drug == null && string.IsNullOrWhiteSpace(specification))
+        {
+            drug = !string.IsNullOrWhiteSpace(drugCode)
+                ? drugs.FirstOrDefault(d =>
+                    d.Code.Equals(drugCode, StringComparison.OrdinalIgnoreCase)
+                    && SameText(d.Name, drugName))
+                : null;
+            drug ??= drugs.FirstOrDefault(d => SameText(d.Name, drugName) && string.IsNullOrWhiteSpace(d.Specification));
+        }
 
         if (drug != null)
         {
@@ -739,6 +1082,15 @@ public class CollectionService : ICollectionService
         return drug;
     }
 
+    private static bool SameDrugIdentity(Drug drug, string name, string specification)
+        => SameText(drug.Name, name) && SameText(drug.Specification, specification);
+
+    private static bool SameText(string? left, string? right)
+        => string.Equals(NormalizeLookupText(left), NormalizeLookupText(right), StringComparison.OrdinalIgnoreCase);
+
+    private static string NormalizeLookupText(string? value)
+        => string.Concat((value ?? "").Where(c => !char.IsWhiteSpace(c)));
+
     private static Customer FindOrCreateSourceDealer(
         JsonElement root,
         string name,
@@ -756,6 +1108,15 @@ public class CollectionService : ICollectionService
         HashSet<string> usedCodes,
         SyncSummaryResultDto result)
         => FindOrCreateCustomer(root, name, preferredCode, customers, usedCodes, result, CustomerType.医院, preferDealer: true, convertExistingToTargetType: false);
+
+    private static Customer FindOrCreatePurchaseDealer(
+        JsonElement root,
+        string name,
+        string? preferredCode,
+        List<Customer> customers,
+        HashSet<string> usedCodes,
+        SyncSummaryResultDto result)
+        => FindOrCreateCustomer(root, name, preferredCode, customers, usedCodes, result, CustomerType.商业, preferDealer: true, convertExistingToTargetType: true);
 
     private static Customer FindOrCreateCustomer(
         JsonElement root,
@@ -788,11 +1149,11 @@ public class CollectionService : ICollectionService
         {
             var changed = false;
             var shortName = GetString(root, "CustomerShortName");
-            var province = GetString(root, "Province");
+            var province = GetProvince(root);
             var salesPerson = GetString(root, "SalesPerson");
             var drugName = GetString(root, "DrugName");
             if (string.IsNullOrWhiteSpace(customer.ShortName) && !string.IsNullOrWhiteSpace(shortName)) { customer.ShortName = shortName; changed = true; }
-            if (string.IsNullOrWhiteSpace(customer.Province) && !string.IsNullOrWhiteSpace(province)) { customer.Province = province; changed = true; }
+            if (!string.IsNullOrWhiteSpace(province) && !SameText(customer.Province, province)) { customer.Province = province; changed = true; }
             if (string.IsNullOrWhiteSpace(customer.SalesPerson) && !string.IsNullOrWhiteSpace(salesPerson)) { customer.SalesPerson = salesPerson; changed = true; }
             if (string.IsNullOrWhiteSpace(customer.DrugName) && !string.IsNullOrWhiteSpace(drugName)) { customer.DrugName = drugName; changed = true; }
             if (convertExistingToTargetType && customer.CustomerType != createType) { customer.CustomerType = createType; changed = true; }
@@ -810,7 +1171,7 @@ public class CollectionService : ICollectionService
             Code = code,
             Name = name,
             ShortName = GetString(root, "CustomerShortName"),
-            Province = GetString(root, "Province"),
+            Province = GetProvince(root),
             SalesPerson = GetString(root, "SalesPerson"),
             DrugName = GetString(root, "DrugName"),
             CustomerType = createType,
@@ -818,6 +1179,49 @@ public class CollectionService : ICollectionService
         customers.Add(customer);
         result.CreatedCustomers++;
         return customer;
+    }
+
+    private static Supplier FindOrCreateSupplier(
+        JsonElement root,
+        string name,
+        List<Supplier> suppliers,
+        HashSet<string> usedCodes)
+    {
+        var supplierName = FirstNonEmpty(name, "江苏神龙药业有限公司");
+        var code = FirstNonEmpty(GetString(root, "SupplierCode"), GetString(root, "OriginalSupplierCode"));
+        var supplier = !string.IsNullOrWhiteSpace(code)
+            ? suppliers.FirstOrDefault(s => s.Code.Equals(code, StringComparison.OrdinalIgnoreCase))
+            : null;
+        supplier ??= suppliers.FirstOrDefault(s => s.Name.Equals(supplierName, StringComparison.OrdinalIgnoreCase));
+
+        if (supplier != null)
+        {
+            var changed = false;
+            var address = GetString(root, "SupplierAddress", "Address");
+            var phone = GetString(root, "SupplierPhone", "Phone");
+            var contact = GetString(root, "SupplierContact", "ContactPerson");
+            if (string.IsNullOrWhiteSpace(supplier.Address) && !string.IsNullOrWhiteSpace(address)) { supplier.Address = address; changed = true; }
+            if (string.IsNullOrWhiteSpace(supplier.Phone) && !string.IsNullOrWhiteSpace(phone)) { supplier.Phone = phone; changed = true; }
+            if (string.IsNullOrWhiteSpace(supplier.ContactPerson) && !string.IsNullOrWhiteSpace(contact)) { supplier.ContactPerson = contact; changed = true; }
+            if (changed) supplier.UpdatedAt = DateTime.UtcNow;
+            return supplier;
+        }
+
+        if (string.IsNullOrWhiteSpace(code) || usedCodes.Contains(code))
+            code = NextSupplierCode(usedCodes);
+        else
+            usedCodes.Add(code);
+
+        supplier = new Supplier
+        {
+            Code = code,
+            Name = supplierName,
+            ContactPerson = GetString(root, "SupplierContact", "ContactPerson"),
+            Phone = GetString(root, "SupplierPhone", "Phone"),
+            Address = GetString(root, "SupplierAddress", "Address"),
+        };
+        suppliers.Add(supplier);
+        return supplier;
     }
 
     private static string NextDrugCode(HashSet<string> usedCodes)
@@ -833,6 +1237,16 @@ public class CollectionService : ICollectionService
     {
         var seq = 1;
         var prefix = "CUST" + DateTime.UtcNow.ToString("yyyyMMdd");
+        string code;
+        do { code = prefix + (seq++).ToString("D3"); }
+        while (!usedCodes.Add(code));
+        return code;
+    }
+
+    private static string NextSupplierCode(HashSet<string> usedCodes)
+    {
+        var seq = 1;
+        var prefix = "SUPP" + DateTime.UtcNow.ToString("yyyyMMdd");
         string code;
         do { code = prefix + (seq++).ToString("D3"); }
         while (!usedCodes.Add(code));
@@ -880,7 +1294,7 @@ public class CollectionService : ICollectionService
             Quantity = root.TryGetProperty("Quantity", out var qty) ? qty.GetDecimal() : 0,
             TaxedUnitPrice = root.TryGetProperty("TaxedUnitPrice", out var up) ? up.GetDecimal() : 0,
             ToCustomerId = toCustomerId,
-            Province = root.TryGetProperty("Province", out var p) ? p.GetString() : null,
+            Province = GetProvince(root),
             SalesPerson = root.TryGetProperty("SalesPerson", out var sp) ? sp.GetString() : null,
             DeliveryOrderNo = root.TryGetProperty("DeliveryOrderNo", out var don) ? don.GetString() : null,
             Operator = root.TryGetProperty("Operator", out var op) ? op.GetString() : null,

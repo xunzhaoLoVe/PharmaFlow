@@ -59,6 +59,12 @@ public class DataCleaner
                     cleaned[kvp.Key] = kvp.Value;
         }
 
+        if (!string.IsNullOrWhiteSpace(config.SourceType)
+            && (!cleaned.TryGetValue("DataType", out var dataType) || IsBlankValue(dataType)))
+        {
+            cleaned["DataType"] = config.SourceType.Trim();
+        }
+
         ApplyPostProcessRules(cleaned, config.PostProcessRules);
 
         return (JsonSerializer.Serialize(cleaned), config.TargetEntity);
@@ -85,6 +91,18 @@ public class DataCleaner
             "bool" => bool.TryParse(rawValue, out var b) && b,
             _ => rawValue
         };
+    }
+
+    private static bool IsBlankValue(object? value)
+    {
+        if (value == null) return true;
+        if (value is string s) return string.IsNullOrWhiteSpace(s);
+        if (value is JsonElement je)
+        {
+            if (je.ValueKind == JsonValueKind.Null || je.ValueKind == JsonValueKind.Undefined) return true;
+            if (je.ValueKind == JsonValueKind.String) return string.IsNullOrWhiteSpace(je.GetString());
+        }
+        return false;
     }
 
     private static void ApplyPostProcessRules(

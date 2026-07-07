@@ -1,12 +1,14 @@
 import { useEffect, useState, useCallback } from 'react';
-import { Table, Button, Space, Input, Modal, Form, message, Popconfirm, Select, Tabs, Upload } from 'antd';
-import { PlusOutlined, SearchOutlined, UploadOutlined, DeleteOutlined } from '@ant-design/icons';
+import { useLocation } from 'react-router-dom';
+import { Table, Button, Space, Input, Modal, Form, message, Select, Upload } from 'antd';
+import { DeleteOutlined, EditOutlined, PlusOutlined, SearchOutlined, UploadOutlined } from '@ant-design/icons';
 import { useAuthStore } from '../../store/authStore';
 import apiClient from '../../api/client';
 import type { ColumnsType } from 'antd/es/table';
 import * as XLSX from 'xlsx';
 import { getCustomers, createCustomer, updateCustomer, deleteCustomer } from '../../api/customers';
 import { getDrugDropdown } from '../../api/drugs';
+import RowActions from '../../components/RowActions';
 import type { CustomerDto, DropdownItem } from '../../types';
 
 const PROVINCES = ['','北京','天津','河北','山西','内蒙古','辽宁','吉林','黑龙江','上海','江苏','浙江','安徽','福建','江西','山东','河南','湖北','湖南','广东','广西','海南','重庆','四川','贵州','云南','西藏','陕西','甘肃','青海','宁夏','新疆'];
@@ -15,7 +17,8 @@ const END_TYPES = ['卫生院','医院','其他','卫生服务中心','卫生室
 
 export default function CustomerListPage() {
   const canWrite = useAuthStore(s => s.canWrite);
-  const [tab, setTab] = useState<string>('distributor');
+  const location = useLocation();
+  const tab = location.pathname.endsWith('/end') ? 'end' : 'distributor';
   const [data, setData] = useState<CustomerDto[]>([]);
   const [loading, setLoading] = useState(false);
   const [search, setSearch] = useState('');
@@ -37,7 +40,8 @@ export default function CustomerListPage() {
     } finally { setLoading(false); }
   }, [search, typeFilter]);
 
-  useEffect(() => { load(); getDrugDropdown().then(setDrugOptions).catch(() => {}); }, [tab]);
+  useEffect(() => { getDrugDropdown().then(setDrugOptions).catch(() => {}); }, []);
+  useEffect(() => { load(); }, [tab]);
   useEffect(() => { setFilteredCount(data.length); setFilteredData(data); }, [data]);
 
   const handleSearch = () => { load(search); };
@@ -137,9 +141,11 @@ export default function CustomerListPage() {
       filters: DISTRIBUTOR_LEVELS.filter(l => l).map(l => ({ text: l, value: l })),
       onFilter: (v, r) => r.levelName === v,
     },
-    ...(canWrite ? [{ title: '操作', width: 150, render: (_: any, r: any) => (
-        <Space><Button size="small" onClick={() => handleEdit(r)}>编辑</Button>
-          <Popconfirm title="确定删除？" onConfirm={() => handleDelete(r.id)}><Button size="small" danger>删除</Button></Popconfirm></Space>),
+    ...(canWrite ? [{ title: '操作', width: 110, render: (_: any, r: any) => (
+        <RowActions actions={[
+          { key: 'edit', label: '编辑', icon: <EditOutlined />, tone: 'primary', onClick: () => handleEdit(r) },
+          { key: 'delete', label: '删除', icon: <DeleteOutlined />, tone: 'danger', confirmTitle: '确定删除？', onClick: () => handleDelete(r.id) },
+        ]} />),
     }] : []),
   ];
   const endColumns: ColumnsType<CustomerDto> = [
@@ -157,18 +163,16 @@ export default function CustomerListPage() {
       filters: END_TYPES.map(t => ({ text: t, value: t })),
       onFilter: (v, r) => r.customerTypeName === v,
     },
-    ...(canWrite ? [{ title: '操作', width: 150, render: (_: any, r: any) => (
-        <Space><Button size="small" onClick={() => handleEdit(r)}>编辑</Button>
-          <Popconfirm title="确定删除？" onConfirm={() => handleDelete(r.id)}><Button size="small" danger>删除</Button></Popconfirm></Space>),
+    ...(canWrite ? [{ title: '操作', width: 110, render: (_: any, r: any) => (
+        <RowActions actions={[
+          { key: 'edit', label: '编辑', icon: <EditOutlined />, tone: 'primary', onClick: () => handleEdit(r) },
+          { key: 'delete', label: '删除', icon: <DeleteOutlined />, tone: 'danger', confirmTitle: '确定删除？', onClick: () => handleDelete(r.id) },
+        ]} />),
     }] : []),
   ];
 
   return (
     <div>
-      <h2 style={{ marginBottom: 16 }}>🏢 客户管理</h2>
-      <Tabs activeKey={tab} onChange={k => { setTab(k); setPage(0); }} items={[
-        { key: 'distributor', label: '经销商' }, { key: 'end', label: '终端客户' },
-      ]} />
       <Space wrap style={{ marginBottom: 16 }}>
         <Input placeholder="客户名称/编码" value={search} onChange={e => setSearch(e.target.value)}
           onPressEnter={handleSearch} prefix={<SearchOutlined />} style={{ width: 220 }} allowClear />

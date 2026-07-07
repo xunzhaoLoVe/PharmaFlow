@@ -305,6 +305,28 @@ public record CollectionRecordDto
     public string? ErrorMessage { get; set; }
 }
 
+public record CollectionSummaryRecordDto
+{
+    public Guid Id { get; set; }
+    public Guid TaskId { get; set; }
+    public Guid SourceId { get; set; }
+    public string SourceName { get; set; } = string.Empty;
+    public string DataType { get; set; } = string.Empty;
+    public string DrugName { get; set; } = string.Empty;
+    public string? Specification { get; set; }
+    public string? BatchNo { get; set; }
+    public string? CompanyName { get; set; }
+    public string? ToCustomerName { get; set; }
+    public decimal? TaxedUnitPrice { get; set; }
+    public decimal? Quantity { get; set; }
+    public string? DistributionDate { get; set; }
+    public string? Province { get; set; }
+    public string? ExpiryDate { get; set; }
+    public Guid? TargetEntityId { get; set; }
+    public string SyncStatus { get; set; } = "Pending";
+    public DateTime CreatedAt { get; set; }
+}
+
 public record ReviewRequest
 {
     public List<Guid> RecordIds { get; set; } = new();

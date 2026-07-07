@@ -289,3 +289,24 @@ export interface CollectionRecordDto {
   rejectReason?: string;
   errorMessage?: string;
 }
+
+export interface CollectionSummaryRecordDto {
+  id: string;
+  taskId: string;
+  sourceId: string;
+  sourceName: string;
+  dataType: string;
+  drugName: string;
+  specification?: string;
+  batchNo?: string;
+  companyName?: string;
+  toCustomerName?: string;
+  taxedUnitPrice?: number;
+  quantity?: number;
+  distributionDate?: string;
+  province?: string;
+  expiryDate?: string;
+  targetEntityId?: string;
+  syncStatus: string;
+  createdAt: string;
+}

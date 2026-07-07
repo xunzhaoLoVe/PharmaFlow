@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback } from 'react';
-import { Table, Button, Space, Input, Modal, Form, Select, message, Popconfirm, Upload } from 'antd';
+import { Table, Button, Space, Input, Modal, Form, Select, message, Upload } from 'antd';
 import { PlusOutlined, UploadOutlined, DeleteOutlined, SearchOutlined } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
 import * as XLSX from 'xlsx';
@@ -8,6 +8,7 @@ import apiClient from '../../api/client';
 import { getDrugDropdown } from '../../api/drugs';
 import { getCustomerDropdown } from '../../api/customers';
 import { getDistribution, recordDownstream, deleteDistribution } from '../../api/distribution';
+import RowActions from '../../components/RowActions';
 import type { ApiResponse, DistributionRecordDto, DropdownItem } from '../../types';
 
 export default function SalesListPage() {
@@ -156,14 +157,15 @@ export default function SalesListPage() {
     { title: '日期', dataIndex: 'distributionDateDisplay', width: 100,
       render: (v: string, r: DistributionRecordDto) => v || (r.distributionDate ? r.distributionDate.substring(0, 10) : '-'),
     },
-    { title: '操作', width: 80, render: (_, r) => (
-        <Popconfirm title="确定删除？" onConfirm={() => handleDelete(r.id)}><Button size="small" danger>删除</Button></Popconfirm>),
+    { title: '操作', width: 64, render: (_, r) => (
+        <RowActions actions={[
+          { key: 'delete', label: '删除', icon: <DeleteOutlined />, tone: 'danger', confirmTitle: '确定删除？', onClick: () => handleDelete(r.id) },
+        ]} />),
     },
   ];
 
   return (
     <div>
-      <h2 style={{ marginBottom: 16 }}>📤 销售管理（下游流转）</h2>
       <Space wrap style={{ marginBottom: 16 }}>
         <Input placeholder="来源客户" value={searchFrom} onChange={e => setSearchFrom(e.target.value)}
           style={{ width: 160 }} allowClear />

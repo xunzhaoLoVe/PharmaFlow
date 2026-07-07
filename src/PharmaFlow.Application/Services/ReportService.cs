@@ -62,58 +62,21 @@ public class ReportService : IReportService
                 || (r.FromCustomer != null && r.FromCustomer.Name.Contains(customerName)));
         var inventoryFlowRecords = await inventoryFlowQuery.ToListAsync();
 
-        var purchaseQuery = _db.PurchaseOrderItems
-            .Include(i => i.Drug)
-            .Include(i => i.PurchaseOrder).ThenInclude(o => o.Supplier)
-            .AsNoTracking()
-            .Where(i => i.PurchaseOrder.Status == OrderStatus.已完成
-                && i.PurchaseOrder.OrderDate >= start
-                && i.PurchaseOrder.OrderDate < endExclusive);
-        if (!string.IsNullOrWhiteSpace(drugName))
-            purchaseQuery = purchaseQuery.Where(i => i.Drug.Name.Contains(drugName));
-        if (!string.IsNullOrWhiteSpace(customerName))
-            purchaseQuery = purchaseQuery.Where(i => i.PurchaseOrder.Supplier.Name.Contains(customerName));
-        var purchaseItems = await purchaseQuery.ToListAsync();
-
-        var inventoryPurchaseQuery = _db.PurchaseOrderItems
-            .Include(i => i.Drug)
-            .Include(i => i.PurchaseOrder).ThenInclude(o => o.Supplier)
-            .AsNoTracking()
-            .Where(i => i.PurchaseOrder.Status == OrderStatus.已完成
-                && i.PurchaseOrder.OrderDate < endExclusive);
-        if (!string.IsNullOrWhiteSpace(drugName))
-            inventoryPurchaseQuery = inventoryPurchaseQuery.Where(i => i.Drug.Name.Contains(drugName));
-        if (!string.IsNullOrWhiteSpace(customerName))
-            inventoryPurchaseQuery = inventoryPurchaseQuery.Where(i => i.PurchaseOrder.Supplier.Name.Contains(customerName));
-        var inventoryPurchaseItems = await inventoryPurchaseQuery.ToListAsync();
-
-        var salesQuery = _db.SalesOrderItems
-            .Include(i => i.Drug)
-            .Include(i => i.SalesOrder).ThenInclude(o => o.Customer)
-            .AsNoTracking()
-            .Where(i => i.SalesOrder.Status == OrderStatus.已完成
-                && i.SalesOrder.OrderDate >= start
-                && i.SalesOrder.OrderDate < endExclusive);
-        if (!string.IsNullOrWhiteSpace(drugName))
-            salesQuery = salesQuery.Where(i => i.Drug.Name.Contains(drugName));
-        if (!string.IsNullOrWhiteSpace(customerName))
-            salesQuery = salesQuery.Where(i => i.SalesOrder.Customer.Name.Contains(customerName));
-        var salesItems = await salesQuery.ToListAsync();
-
-        var firstLevelPurchaseFlowRecords = distributionRecords
-            .Where(r => IsManufacturerToFirstLevelPurchase(r, selfId))
+        var purchaseManagementRecords = distributionRecords
+            .Where(r => IsPurchaseManagementRecord(r, selfId))
             .ToList();
-        var usePurchaseOrdersForIntake = purchaseItems.Count > 0;
-
-        var inventoryFirstLevelPurchaseFlowRecords = inventoryFlowRecords
-            .Where(r => IsManufacturerToFirstLevelPurchase(r, selfId))
+        var salesManagementRecords = distributionRecords
+            .Where(r => IsSalesManagementRecord(r, selfId))
             .ToList();
-        var usePurchaseOrdersForInventory = inventoryPurchaseItems.Count > 0;
-        var inventoryBalanceFlowRecords = usePurchaseOrdersForInventory
-            ? inventoryFlowRecords.Where(r => !IsManufacturerToFirstLevelPurchase(r, selfId)).ToList()
-            : inventoryFlowRecords;
 
-        var dealerTransferRecords = distributionRecords
+        var inventoryPurchaseManagementRecords = inventoryFlowRecords
+            .Where(r => IsPurchaseManagementRecord(r, selfId))
+            .ToList();
+        var inventorySalesManagementRecords = inventoryFlowRecords
+            .Where(r => IsSalesManagementRecord(r, selfId))
+            .ToList();
+
+        var dealerTransferRecords = salesManagementRecords
             .Where(r => r.FromCustomer != null
                 && r.ToCustomer != null
                 && IsDealer(r.FromCustomer)
@@ -122,7 +85,7 @@ public class ReportService : IReportService
                 && r.FromCustomerId != r.ToCustomerId)
             .ToList();
 
-        var dealerTerminalSalesRecords = distributionRecords
+        var dealerTerminalSalesRecords = salesManagementRecords
             .Where(r => r.FromCustomer != null
                 && r.ToCustomer != null
                 && IsDealer(r.FromCustomer)
@@ -131,7 +94,7 @@ public class ReportService : IReportService
                 && r.Quantity > 0)
             .ToList();
 
-        var channelFlowRecords = distributionRecords
+        var channelFlowRecords = salesManagementRecords
             .Where(r => r.Quantity > 0
                 && ((r.FromCustomer != null && IsDealer(r.FromCustomer))
                     || (r.ToCustomer != null && IsDealer(r.ToCustomer))))
@@ -148,26 +111,22 @@ public class ReportService : IReportService
             inventoryQuery = inventoryQuery.Where(i => i.Customer != null && i.Customer.Name.Contains(customerName));
         var inventories = await inventoryQuery.ToListAsync();
 
-        var salesQuantity = dealerTerminalSalesRecords.Sum(r => r.Quantity);
-        var salesAmount = dealerTerminalSalesRecords.Sum(r => r.Quantity * r.TaxedUnitPrice);
-        var purchaseQuantity = usePurchaseOrdersForIntake
-            ? purchaseItems.Sum(i => (decimal)i.Quantity)
-            : firstLevelPurchaseFlowRecords.Sum(r => r.Quantity);
-        var purchaseAmount = usePurchaseOrdersForIntake
-            ? purchaseItems.Sum(i => i.TotalPrice)
-            : firstLevelPurchaseFlowRecords.Sum(r => r.Quantity * r.TaxedUnitPrice);
+        var salesQuantity = salesManagementRecords.Sum(r => r.Quantity);
+        var salesAmount = salesManagementRecords.Sum(r => r.Quantity * r.TaxedUnitPrice);
+        var terminalSalesQuantity = dealerTerminalSalesRecords.Sum(r => r.Quantity);
+        var purchaseQuantity = purchaseManagementRecords.Sum(r => r.Quantity);
+        var purchaseAmount = purchaseManagementRecords.Sum(r => r.Quantity * r.TaxedUnitPrice);
         var flowQuantity = channelFlowRecords.Sum(r => r.Quantity);
         var dealerInventoryQuantity = BuildDealerInventoryQuantity(
-            usePurchaseOrdersForInventory ? inventoryPurchaseItems : Enumerable.Empty<PurchaseOrderItem>(),
-            usePurchaseOrdersForInventory ? Enumerable.Empty<DistributionRecord>() : inventoryFirstLevelPurchaseFlowRecords,
-            inventoryBalanceFlowRecords);
+            inventoryPurchaseManagementRecords,
+            inventorySalesManagementRecords);
         var days = Math.Max(1, (end - start).Days + 1);
 
         var touchedCustomers = distributionRecords
             .SelectMany(r => new[] { r.ToCustomer, r.FromCustomer })
             .Where(c => c != null && c.Code != "SELF")
             .Select(c => c!)
-            .GroupBy(c => c.Id)
+            .GroupBy(c => CustomerNameKey(c.Name))
             .Select(g => g.First())
             .ToList();
 
@@ -182,8 +141,6 @@ public class ReportService : IReportService
             .ToList();
 
         var endCustomerSales = BuildEndCustomerSales(dealerTerminalSalesRecords);
-        var topDrugs = BuildTopDrugs(Enumerable.Empty<SalesOrderItem>(), dealerTerminalSalesRecords);
-        var topCustomers = BuildTopCustomers(Enumerable.Empty<SalesOrderItem>(), dealerTerminalSalesRecords);
 
         return new ReportOverviewDto
         {
@@ -199,42 +156,35 @@ public class ReportService : IReportService
                 FlowQuantity = flowQuantity,
                 InventoryQuantity = dealerInventoryQuantity,
                 DealerPurchaseQuantity = purchaseQuantity,
-                DealerTerminalSalesQuantity = salesQuantity,
+                DealerTerminalSalesQuantity = terminalSalesQuantity,
                 DealerInventoryQuantity = dealerInventoryQuantity,
                 DealerTransferQuantity = dealerTransferRecords.Sum(r => r.Quantity),
                 FlowRecordCount = distributionRecords.Count,
                 BatchCount = distributionRecords.Select(r => r.BatchNo).Where(x => !string.IsNullOrWhiteSpace(x)).Distinct().Count(),
                 DrugCount = distributionRecords.Select(r => r.DrugId)
-                    .Concat(purchaseItems.Select(i => i.DrugId))
-                    .Concat(salesItems.Select(i => i.DrugId))
                     .Distinct()
                     .Count(),
-                DealerCount = touchedCustomers.Count(IsDealer)
-                    + purchaseItems.Select(i => i.PurchaseOrder.Supplier.Name).Where(n => !string.IsNullOrWhiteSpace(n)).Distinct().Count(),
+                DealerCount = touchedCustomers.Count(IsDealer),
                 TerminalCustomerCount = touchedCustomers.Count(c => !IsDealer(c)),
                 ProvinceCount = touchedCustomers.Select(c => c.Province).Where(p => !string.IsNullOrWhiteSpace(p)).Distinct().Count(),
                 LowStockCount = lowStockRisks.Count,
                 ExpiringCount = expiringRisks.Count,
                 AverageDailyFlow = decimal.Round(flowQuantity / days, 2),
             },
-            DrugDistribution = DimensionFromRecords(dealerTerminalSalesRecords, r => r.Drug.Name, r => r.Quantity, r => r.Quantity * r.TaxedUnitPrice, 8),
-            CustomerDistribution = DimensionFromRecords(dealerTerminalSalesRecords, r => r.ToCustomer?.Name ?? "未知客户", r => r.Quantity, r => r.Quantity * r.TaxedUnitPrice, 8),
-            ProvinceDistribution = DimensionFromRecords(dealerTerminalSalesRecords, r => FirstNonEmpty(r.ToCustomer?.Province, r.Province, "未知区域"), r => r.Quantity, r => r.Quantity * r.TaxedUnitPrice, 12),
-            SourceDistribution = usePurchaseOrdersForIntake
-                ? DimensionFromPurchaseItems(purchaseItems, 8)
-                : DimensionFromRecords(firstLevelPurchaseFlowRecords, r => r.ToCustomer?.Name ?? SourceName(r), r => r.Quantity, r => r.Quantity * r.TaxedUnitPrice, 8),
-            DealerLevelDistribution = BuildDealerLevelDistribution(touchedCustomers, purchaseItems),
+            DrugDistribution = DimensionFromRecords(salesManagementRecords, r => r.Drug.Name, r => r.Quantity, r => r.Quantity * r.TaxedUnitPrice, 8),
+            CustomerDistribution = DimensionFromRecords(salesManagementRecords, r => r.ToCustomer?.Name ?? "未知客户", r => r.Quantity, r => r.Quantity * r.TaxedUnitPrice, 8),
+            ProvinceDistribution = DimensionFromRecords(salesManagementRecords, r => FirstNonEmpty(r.ToCustomer?.Province, r.Province, "未知区域"), r => r.Quantity, r => r.Quantity * r.TaxedUnitPrice, 12),
+            SourceDistribution = DimensionFromRecords(purchaseManagementRecords, r => r.ToCustomer?.Name ?? SourceName(r), r => r.Quantity, r => r.Quantity * r.TaxedUnitPrice, 8),
+            DealerLevelDistribution = BuildDealerLevelDistribution(touchedCustomers),
             Trend = BuildTrend(
                 start,
                 end,
                 grain,
-                usePurchaseOrdersForIntake ? purchaseItems : Enumerable.Empty<PurchaseOrderItem>(),
-                usePurchaseOrdersForIntake ? Enumerable.Empty<DistributionRecord>() : firstLevelPurchaseFlowRecords,
-                Enumerable.Empty<SalesOrderItem>(),
-                dealerTerminalSalesRecords,
+                purchaseManagementRecords,
+                salesManagementRecords,
                 channelFlowRecords),
-            TopDrugs = topDrugs,
-            TopCustomers = topCustomers,
+            TopDrugs = BuildTopDrugs(salesManagementRecords),
+            TopCustomers = BuildTopCustomers(salesManagementRecords),
             InventoryRisks = BuildInventoryRisks(dealerInventories),
             EndCustomerSales = endCustomerSales.Take(300).ToList(),
         };
@@ -243,13 +193,23 @@ public class ReportService : IReportService
     public async Task<List<EndCustomerSaleDto>> GetEndCustomerSalesAsync(
         string? drugName = null, DateTime? startDate = null, DateTime? endDate = null)
     {
+        var selfId = await _db.Customers
+            .Where(c => c.Code == "SELF")
+            .Select(c => (Guid?)c.Id)
+            .FirstOrDefaultAsync();
+
         var query = _db.DistributionRecords
+            .Include(r => r.FromCustomer)
             .Include(r => r.ToCustomer)
             .Include(r => r.Drug)
             .Where(r => r.ToCustomer != null
                 && !r.ToCustomer.IsDeleted
                 && r.ToCustomer.CustomerType != CustomerType.商业
-                && r.Quantity > 0);
+                && r.Quantity > 0
+                && !r.SupplierId.HasValue);
+
+        if (selfId.HasValue)
+            query = query.Where(r => r.FromCustomerId != selfId.Value && r.ToCustomerId != selfId.Value);
 
         if (!string.IsNullOrWhiteSpace(drugName))
             query = query.Where(r => r.Drug!.Name.Contains(drugName));
@@ -260,18 +220,8 @@ public class ReportService : IReportService
         if (endDate.HasValue)
             query = query.Where(r => r.DistributionDate < endDate.Value.Date.AddDays(1));
 
-        return await query
-            .GroupBy(r => new { ToName = r.ToCustomer!.Name, r.ToCustomer.Province, DrugName = r.Drug!.Name, r.Drug.Specification })
-            .Select(g => new EndCustomerSaleDto
-            {
-                CustomerName = g.Key.ToName,
-                Province = g.Key.Province,
-                DrugName = g.Key.DrugName,
-                Specification = g.Key.Specification,
-                TotalQuantity = g.Sum(r => r.Quantity)
-            })
-            .OrderByDescending(r => r.TotalQuantity)
-            .ToListAsync();
+        var records = await query.AsNoTracking().ToListAsync();
+        return BuildEndCustomerSales(records);
     }
 
     private static string NormalizeGranularity(string? granularity)
@@ -288,38 +238,26 @@ public class ReportService : IReportService
     private static bool IsDealer(Customer c)
         => c.CustomerType == CustomerType.商业;
 
-    private static bool IsFirstLevelDealer(Customer c)
-        => c.CustomerType == CustomerType.商业 && c.Level == DistributorLevel.一级经销商;
+    private static bool IsPurchaseManagementRecord(DistributionRecord record, Guid? selfId)
+        => record.SupplierId.HasValue
+            || (selfId.HasValue && (record.FromCustomerId == selfId.Value || record.ToCustomerId == selfId.Value));
 
-    private static bool IsManufacturerToFirstLevelPurchase(DistributionRecord record, Guid? selfId)
-        => record.ToCustomer != null
-            && IsFirstLevelDealer(record.ToCustomer)
-            && record.Quantity > 0
-            && (record.SupplierId.HasValue
-                || record.FromCustomerId == selfId
-                || record.FromCustomer == null
-                || !IsDealer(record.FromCustomer));
+    private static bool IsSalesManagementRecord(DistributionRecord record, Guid? selfId)
+        => !record.SupplierId.HasValue
+            && (!selfId.HasValue || (record.FromCustomerId != selfId.Value && record.ToCustomerId != selfId.Value));
 
     private static int EffectiveLowStock(Drug drug)
         => drug.WarningLowQuantity > 0 ? drug.WarningLowQuantity : 10;
 
     private static decimal BuildDealerInventoryQuantity(
-        IEnumerable<PurchaseOrderItem> purchaseItems,
-        IEnumerable<DistributionRecord> firstLevelPurchaseRecords,
+        IEnumerable<DistributionRecord> purchaseRecords,
         IEnumerable<DistributionRecord> flowRecords)
     {
         var balances = new Dictionary<(string DealerName, Guid DrugId, string BatchNo), decimal>();
 
-        foreach (var item in purchaseItems)
+        foreach (var record in purchaseRecords)
         {
-            var dealerName = FirstNonEmpty(item.PurchaseOrder.Supplier?.Name, "一级经销商");
-            var key = (dealerName, item.DrugId, item.BatchNo);
-            balances[key] = balances.GetValueOrDefault(key) + item.Quantity;
-        }
-
-        foreach (var record in firstLevelPurchaseRecords)
-        {
-            if (record.ToCustomer == null) continue;
+            if (record.ToCustomer == null || !IsDealer(record.ToCustomer)) continue;
             var key = (record.ToCustomer.Name, record.DrugId, record.BatchNo);
             balances[key] = balances.GetValueOrDefault(key) + record.Quantity;
         }
@@ -344,6 +282,9 @@ public class ReportService : IReportService
 
     private static string FirstNonEmpty(params string?[] values)
         => values.FirstOrDefault(v => !string.IsNullOrWhiteSpace(v))?.Trim() ?? "";
+
+    private static string CustomerNameKey(string? name)
+        => string.IsNullOrWhiteSpace(name) ? "UNKNOWN" : name.Trim();
 
     private static string SourceName(DistributionRecord r)
         => FirstNonEmpty(r.Supplier?.Name, r.FromCustomer?.Name, "未知来源");
@@ -374,28 +315,7 @@ public class ReportService : IReportService
         return grouped;
     }
 
-    private static List<ReportDimensionItemDto> DimensionFromPurchaseItems(IEnumerable<PurchaseOrderItem> items, int take)
-    {
-        var grouped = items
-            .GroupBy(i => FirstNonEmpty(i.PurchaseOrder.Supplier?.Name, "一级经销商"))
-            .Select(g => new ReportDimensionItemDto
-            {
-                Name = g.Key,
-                Quantity = g.Sum(i => (decimal)i.Quantity),
-                Amount = g.Sum(i => i.TotalPrice),
-                Count = g.Select(i => i.PurchaseOrderId).Distinct().Count(),
-            })
-            .OrderByDescending(x => x.Quantity)
-            .Take(take)
-            .ToList();
-
-        var total = grouped.Sum(x => x.Quantity);
-        foreach (var item in grouped)
-            item.Percent = total == 0 ? 0 : decimal.Round(item.Quantity * 100 / total, 2);
-        return grouped;
-    }
-
-    private static List<ReportDimensionItemDto> BuildDealerLevelDistribution(IEnumerable<Customer> customers, IEnumerable<PurchaseOrderItem> purchaseItems)
+    private static List<ReportDimensionItemDto> BuildDealerLevelDistribution(IEnumerable<Customer> customers)
     {
         var levelRows = customers
             .GroupBy(c => IsDealer(c) ? (c.Level?.ToString() ?? "未分级经销商") : "终端客户")
@@ -406,30 +326,6 @@ public class ReportService : IReportService
                 Quantity = g.Count(),
             })
             .ToList();
-
-        var purchaseDealerCount = purchaseItems
-            .Select(i => i.PurchaseOrder.Supplier.Name)
-            .Where(n => !string.IsNullOrWhiteSpace(n))
-            .Distinct()
-            .Count();
-        if (purchaseDealerCount > 0)
-        {
-            var tier1 = levelRows.FirstOrDefault(x => x.Name == DistributorLevel.一级经销商.ToString());
-            if (tier1 == null)
-            {
-                levelRows.Add(new ReportDimensionItemDto
-                {
-                    Name = DistributorLevel.一级经销商.ToString(),
-                    Count = purchaseDealerCount,
-                    Quantity = purchaseDealerCount,
-                });
-            }
-            else
-            {
-                tier1.Count += purchaseDealerCount;
-                tier1.Quantity += purchaseDealerCount;
-            }
-        }
 
         var grouped = levelRows.OrderByDescending(x => x.Count).ToList();
         var total = grouped.Sum(x => x.Count);
@@ -442,37 +338,21 @@ public class ReportService : IReportService
         DateTime start,
         DateTime end,
         string grain,
-        IEnumerable<PurchaseOrderItem> purchaseItems,
-        IEnumerable<DistributionRecord> supplierFallbackRecords,
-        IEnumerable<SalesOrderItem> salesItems,
-        IEnumerable<DistributionRecord> distributionSalesRecords,
+        IEnumerable<DistributionRecord> purchaseRecords,
+        IEnumerable<DistributionRecord> salesRecords,
         IEnumerable<DistributionRecord> downstreamFlowRecords)
     {
         var periods = EnumeratePeriods(start, end, grain)
             .ToDictionary(x => x.Key, x => new ReportTrendPointDto { Period = x.Label }, StringComparer.OrdinalIgnoreCase);
 
-        foreach (var item in purchaseItems)
-        {
-            var key = PeriodKey(item.PurchaseOrder.OrderDate, grain);
-            if (!periods.TryGetValue(key, out var point)) continue;
-            point.PurchaseQuantity += item.Quantity;
-            point.PurchaseAmount += item.TotalPrice;
-        }
-        foreach (var record in supplierFallbackRecords)
+        foreach (var record in purchaseRecords)
         {
             var key = PeriodKey(record.DistributionDate, grain);
             if (!periods.TryGetValue(key, out var point)) continue;
             point.PurchaseQuantity += record.Quantity;
             point.PurchaseAmount += record.Quantity * record.TaxedUnitPrice;
         }
-        foreach (var item in salesItems)
-        {
-            var key = PeriodKey(item.SalesOrder.OrderDate, grain);
-            if (!periods.TryGetValue(key, out var point)) continue;
-            point.SalesQuantity += item.Quantity;
-            point.SalesAmount += item.TotalPrice;
-        }
-        foreach (var record in distributionSalesRecords)
+        foreach (var record in salesRecords)
         {
             var key = PeriodKey(record.DistributionDate, grain);
             if (!periods.TryGetValue(key, out var point)) continue;
@@ -527,24 +407,15 @@ public class ReportService : IReportService
             _ => date.ToString("MM/dd", CultureInfo.InvariantCulture),
         };
 
-    private static List<ReportRankItemDto> BuildTopDrugs(
-        IEnumerable<SalesOrderItem> salesItems,
-        IEnumerable<DistributionRecord> distributionSalesRecords)
+    private static List<ReportRankItemDto> BuildTopDrugs(IEnumerable<DistributionRecord> salesRecords)
     {
-        var rows = salesItems.Select(i => new
-            {
-                Name = i.Drug.Name,
-                SubName = i.Drug.Specification,
-                Quantity = (decimal)i.Quantity,
-                Amount = i.TotalPrice,
-            })
-            .Concat(distributionSalesRecords.Select(r => new
+        var rows = salesRecords.Select(r => new
             {
                 Name = r.Drug.Name,
                 SubName = r.Drug.Specification,
                 Quantity = r.Quantity,
                 Amount = r.Quantity * r.TaxedUnitPrice,
-            }));
+            });
 
         return rows.GroupBy(x => new { x.Name, x.SubName })
             .Select(g => new ReportRankItemDto
@@ -560,24 +431,15 @@ public class ReportService : IReportService
             .ToList();
     }
 
-    private static List<ReportRankItemDto> BuildTopCustomers(
-        IEnumerable<SalesOrderItem> salesItems,
-        IEnumerable<DistributionRecord> distributionSalesRecords)
+    private static List<ReportRankItemDto> BuildTopCustomers(IEnumerable<DistributionRecord> salesRecords)
     {
-        var rows = salesItems.Select(i => new
-            {
-                Name = i.SalesOrder.Customer.Name,
-                SubName = i.SalesOrder.Customer.Province,
-                Quantity = (decimal)i.Quantity,
-                Amount = i.TotalPrice,
-            })
-            .Concat(distributionSalesRecords.Select(r => new
+        var rows = salesRecords.Select(r => new
             {
                 Name = r.ToCustomer?.Name ?? "未知客户",
                 SubName = r.ToCustomer?.Province ?? r.Province,
                 Quantity = r.Quantity,
                 Amount = r.Quantity * r.TaxedUnitPrice,
-            }));
+            });
 
         return rows.GroupBy(x => new { x.Name, x.SubName })
             .Select(g => new ReportRankItemDto
@@ -596,11 +458,11 @@ public class ReportService : IReportService
     private static List<EndCustomerSaleDto> BuildEndCustomerSales(IEnumerable<DistributionRecord> records)
         => records
             .Where(r => r.ToCustomer != null && !IsDealer(r.ToCustomer))
-            .GroupBy(r => new { r.ToCustomer!.Name, r.ToCustomer.Province, DrugName = r.Drug.Name, r.Drug.Specification })
+            .GroupBy(r => new { CustomerKey = CustomerNameKey(r.ToCustomer!.Name), DrugName = r.Drug.Name, r.Drug.Specification })
             .Select(g => new EndCustomerSaleDto
             {
-                CustomerName = g.Key.Name,
-                Province = g.Key.Province,
+                CustomerName = FirstNonEmpty(g.First().ToCustomer?.Name, "未知客户"),
+                Province = FirstNonEmpty(g.Select(r => r.ToCustomer?.Province).ToArray()),
                 DrugName = g.Key.DrugName,
                 Specification = g.Key.Specification,
                 TotalQuantity = g.Sum(r => r.Quantity),
