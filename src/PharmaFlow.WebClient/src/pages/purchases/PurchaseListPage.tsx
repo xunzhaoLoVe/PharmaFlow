@@ -63,9 +63,9 @@ export default function PurchaseListPage() {
     setBatchModalOpen(true);
   };
   const handleClearBatch = async (batch: ImportBatchDto) => {
-    if (!window.confirm(`确定删除「${batch.name}」这次导入的数据？删除后会同步还原相关库存。`)) return;
+    if (!window.confirm(`确定删除「${batch.name}」这批数据？删除后会同步还原相关库存。`)) return;
     await apiClient.delete(`/distribution/import-batches/${batch.id}`);
-    message.success('已清空该导入批次');
+    message.success('已删除该批数据');
     load(); loadImportBatches();
   };
 
@@ -73,6 +73,8 @@ export default function PurchaseListPage() {
     const values = await form.validateFields();
     const selectedDrug = drugs.find(d => d.id === values.drugId);
     const selectedCust = customers.find(c => c.id === values.customerId);
+    const importBatchId = typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`;
+    const importBatchName = `手工新增采购 ${dayjs().format('YYYY-MM-DD HH:mm')}`;
     await recordDownstream({
       drugId: values.drugId,
       drugName: (selectedDrug?.name || '').split(' [')[0],
@@ -85,8 +87,10 @@ export default function PurchaseListPage() {
       deliveryOrderNo: values.deliveryOrderNo || '',
       distributionDate: values.distributionDate ? dayjs(values.distributionDate).format('YYYY-MM-DD') : '',
       province: values.province || '',
+      importBatchId,
+      importBatchName,
     });
-    message.success('出货记录已保存'); setModalOpen(false); load();
+    message.success('出货记录已保存'); setModalOpen(false); load(); loadImportBatches();
   };
 
   // Excel import
@@ -228,20 +232,20 @@ export default function PurchaseListPage() {
         {canWrite && <Upload accept=".xlsx" showUploadList={false} beforeUpload={handleExcelImport}>
           <Button icon={<UploadOutlined />}>导入Excel</Button>
         </Upload>}
-        {canWrite && <Button danger icon={<DeleteOutlined />} onClick={openBatchModal}>删除导入数据</Button>}
+        {canWrite && <Button danger icon={<DeleteOutlined />} onClick={openBatchModal}>删除数据</Button>}
       </Space>
       <Table rowKey="id" columns={columns} dataSource={tableData} loading={loading}
         pagination={{ defaultPageSize: 10, showTotal: () => `共 ${tableData.length} 条`, showSizeChanger: true }} />
-      <Modal title="选择要删除的采购导入" open={batchModalOpen} onCancel={() => setBatchModalOpen(false)} footer={null} width={760}>
+      <Modal title="选择要删除的采购数据" open={batchModalOpen} onCancel={() => setBatchModalOpen(false)} footer={null} width={760}>
         <Table
           rowKey="id"
           size="small"
           dataSource={importBatches}
-          pagination={{ pageSize: 8, showTotal: () => `共 ${importBatches.length} 次导入` }}
+          pagination={{ pageSize: 8, showTotal: () => `共 ${importBatches.length} 批数据` }}
           columns={[
-            { title: '导入文件/时间', dataIndex: 'name', ellipsis: true },
+            { title: '数据来源/时间', dataIndex: 'name', ellipsis: true },
             { title: '记录数', dataIndex: 'count', width: 90 },
-            { title: '导入时间', dataIndex: 'createdAt', width: 150, render: (v: string) => dayjs(v).format('YYYY-MM-DD HH:mm') },
+            { title: '创建时间', dataIndex: 'createdAt', width: 150, render: (v: string) => dayjs(v).format('YYYY-MM-DD HH:mm') },
             { title: '操作', width: 90, render: (_, batch) => <Button danger size="small" icon={<DeleteOutlined />} onClick={() => handleClearBatch(batch)}>删除</Button> },
           ]}
         />
