@@ -9,7 +9,4 @@ COPY publish/ ./
 EXPOSE 5000
 ENV ASPNETCORE_URLS=http://+:5000
 
-HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
-    CMD wget -q --spider http://localhost:5000/api/dashboard/stats || exit 1
-
 ENTRYPOINT ["dotnet", "PharmaFlow.WebApi.dll"]
