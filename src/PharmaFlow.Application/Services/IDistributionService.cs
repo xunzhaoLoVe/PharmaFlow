@@ -14,6 +14,8 @@ public interface IDistributionService
     /// <summary>清空所有流向记录和库存数据（物理删除），返回删除的流向记录条数</summary>
     Task<int> ClearAllAsync();
     Task<int> ClearBySourceAsync(bool isPurchase);
+    Task<int> ClearSalesByOriginAsync(string origin);
+    Task<int> ClearPurchasesByOriginAsync(string origin);
     Task UpdateDistributionRecordAsync(Guid recordId, decimal newQuantity);
     Task<IReadOnlyList<ChannelConflictDto>> GetChannelConflictsAsync(string? batchNo = null);
 }

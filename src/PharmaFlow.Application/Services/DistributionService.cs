@@ -9,6 +9,7 @@ namespace PharmaFlow.Application.Services;
 public class DistributionService : IDistributionService
 {
     private readonly AppDbContext _db;
+    private const string SummarySyncOperator = "采集汇总同步";
     public DistributionService(AppDbContext db) => _db = db;
 
     private record TraceSupplierInfo(string NodeId, string Name, decimal Quantity, DateTime FirstDate);
@@ -705,6 +706,140 @@ public class DistributionService : IDistributionService
         var count = await _db.DistributionRecords.CountAsync();
         await _db.Database.ExecuteSqlRawAsync($"DELETE FROM DistributionRecords WHERE {where}");
         return count;
+    }
+
+    public async Task<int> ClearSalesByOriginAsync(string origin)
+        => await ClearDistributionByOriginAsync(isPurchase: false, origin);
+
+    public async Task<int> ClearPurchasesByOriginAsync(string origin)
+        => await ClearDistributionByOriginAsync(isPurchase: true, origin);
+
+    private async Task<int> ClearDistributionByOriginAsync(bool isPurchase, string origin)
+    {
+        var normalizedOrigin = origin.Trim().ToLowerInvariant();
+        if (normalizedOrigin is not ("manual" or "sync"))
+            throw new ArgumentException("清空类型无效", nameof(origin));
+
+        var selfId = await _db.Customers
+            .Where(c => c.Code == "SELF")
+            .Select(c => (Guid?)c.Id)
+            .FirstOrDefaultAsync();
+
+        var query = _db.DistributionRecords.AsQueryable();
+        if (isPurchase)
+        {
+            query = query.Where(r => r.SupplierId != null);
+        }
+        else
+        {
+            query = query.Where(r => r.SupplierId == null && r.FromCustomerId != null);
+            if (selfId.HasValue)
+                query = query.Where(r => r.FromCustomerId != selfId.Value && r.ToCustomerId != selfId.Value);
+        }
+
+        query = normalizedOrigin == "sync"
+            ? query.Where(r => r.Operator == SummarySyncOperator)
+            : query.Where(r => r.Operator == null || r.Operator != SummarySyncOperator);
+
+        var records = await query.ToListAsync();
+        if (records.Count == 0)
+            return 0;
+
+        if (isPurchase)
+            await ReversePurchaseInventoryAsync(records);
+        else
+            await ReverseSalesInventoryAsync(records);
+
+        if (normalizedOrigin == "sync")
+        {
+            var targetIds = records.Select(r => r.Id).ToList();
+            var collectionRecords = await _db.CollectionRecords
+                .Where(r => r.TargetEntityType == "DistributionRecord"
+                    && r.TargetEntityId.HasValue
+                    && targetIds.Contains(r.TargetEntityId.Value))
+                .ToListAsync();
+
+            foreach (var record in collectionRecords)
+            {
+                record.TargetEntityId = null;
+                record.UpdatedAt = DateTime.UtcNow;
+            }
+        }
+
+        _db.DistributionRecords.RemoveRange(records);
+        await _db.SaveChangesAsync();
+        return records.Count;
+    }
+
+    private async Task ReversePurchaseInventoryAsync(List<DistributionRecord> records)
+    {
+        var drugIds = records.Select(r => r.DrugId).Distinct().ToList();
+        var batchNos = records.Select(r => r.BatchNo).Distinct().ToList();
+        var customerIds = records
+            .Where(r => r.ToCustomerId.HasValue)
+            .Select(r => r.ToCustomerId!.Value)
+            .Distinct()
+            .ToList();
+
+        var inventories = await _db.Inventories
+            .Where(i => drugIds.Contains(i.DrugId)
+                && batchNos.Contains(i.BatchNo)
+                && i.CustomerId.HasValue
+                && customerIds.Contains(i.CustomerId.Value))
+            .ToListAsync();
+
+        var inventoryByKey = inventories
+            .GroupBy(i => (i.DrugId, i.BatchNo, i.CustomerId!.Value))
+            .ToDictionary(g => g.Key, g => g.First());
+
+        foreach (var record in records)
+        {
+            if (record.ToCustomerId.HasValue
+                && inventoryByKey.TryGetValue((record.DrugId, record.BatchNo, record.ToCustomerId.Value), out var toInv))
+            {
+                toInv.Quantity -= record.Quantity;
+                if (toInv.Quantity < 0) toInv.Quantity = 0;
+            }
+        }
+    }
+
+    private async Task ReverseSalesInventoryAsync(List<DistributionRecord> records)
+    {
+        var drugIds = records.Select(r => r.DrugId).Distinct().ToList();
+        var batchNos = records.Select(r => r.BatchNo).Distinct().ToList();
+        var customerIds = records
+            .SelectMany(r => new[] { r.FromCustomerId, r.ToCustomerId })
+            .Where(id => id.HasValue)
+            .Select(id => id!.Value)
+            .Distinct()
+            .ToList();
+
+        var inventories = await _db.Inventories
+            .Where(i => drugIds.Contains(i.DrugId)
+                && batchNos.Contains(i.BatchNo)
+                && i.CustomerId.HasValue
+                && customerIds.Contains(i.CustomerId.Value))
+            .ToListAsync();
+
+        var inventoryByKey = inventories
+            .GroupBy(i => (i.DrugId, i.BatchNo, i.CustomerId!.Value))
+            .ToDictionary(g => g.Key, g => g.First());
+
+        foreach (var record in records)
+        {
+            if (record.FromCustomerId.HasValue
+                && inventoryByKey.TryGetValue((record.DrugId, record.BatchNo, record.FromCustomerId.Value), out var fromInv))
+            {
+                fromInv.Quantity += record.Quantity;
+            }
+
+            if (record.ToCustomerId.HasValue
+                && inventoryByKey.TryGetValue((record.DrugId, record.BatchNo, record.ToCustomerId.Value), out var toInv))
+            {
+                toInv.Quantity -= record.Quantity;
+                if (toInv.Quantity < 0) toInv.Quantity = 0;
+            }
+        }
     }
 
     public async Task DeleteDistributionRecordAsync(Guid recordId)

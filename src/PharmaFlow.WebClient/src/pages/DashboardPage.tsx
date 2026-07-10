@@ -39,22 +39,11 @@ interface Summary {
 
 const COLORS = ['#3b82f6', '#18c18f', '#f97316', '#8b5cf6', '#06b6d4', '#16a34a', '#94a3b8', '#2563eb'];
 const MAP_PROVINCE_TOTAL = 34;
-const MAP_VIEWBOX_WIDTH = 920;
-const MAP_VIEWBOX_HEIGHT = 640;
-const MAP_VIEWBOX_PADDING = 24;
-const MAP_CALLOUT_WIDTH = 92;
-const MAP_CALLOUT_HEIGHT = 34;
-
-const DENSE_PROVINCE_LABEL_SLOTS: Record<string, { x: number; y: number; anchor: 'start' | 'end' }> = {
-  北京市: { x: 710, y: 140, anchor: 'start' },
-  天津市: { x: 724, y: 178, anchor: 'start' },
-  山东省: { x: 716, y: 220, anchor: 'start' },
-  江苏省: { x: 735, y: 262, anchor: 'start' },
-  上海市: { x: 742, y: 304, anchor: 'start' },
-  浙江省: { x: 728, y: 346, anchor: 'start' },
-  香港特别行政区: { x: 650, y: 416, anchor: 'start' },
-  澳门特别行政区: { x: 650, y: 456, anchor: 'start' },
-};
+const MAP_VIEWBOX_WIDTH = 1080;
+const MAP_VIEWBOX_HEIGHT = 860;
+const MAP_VIEWBOX_PADDING_X = 18;
+const MAP_VIEWBOX_PADDING_Y = 20;
+const SMALL_REGION_NAMES = new Set(['北京市', '天津市', '上海市', '香港特别行政区', '澳门特别行政区']);
 
 const PROV_MAP: Record<string, string> = {
   北京: '北京市',
@@ -131,18 +120,8 @@ function toCountMap(data: CountItem[] | null) {
 interface ProjectedMapFeature {
   name: string;
   path: string;
-  labelX: number;
-  labelY: number;
-}
-
-interface MapProvinceLabel {
-  feature: ProjectedMapFeature;
-  value: number;
-  callout?: {
-    x: number;
-    y: number;
-    anchor: 'start' | 'end';
-  };
+  centerX: number;
+  centerY: number;
 }
 
 interface MapTooltipState {
@@ -192,14 +171,16 @@ function createProjection(features: any[]): ProjectionConfig {
 
   const width = Math.max(maxX - minX, 1);
   const height = Math.max(maxY - minY, 1);
-  const scale = Math.min((MAP_VIEWBOX_WIDTH - MAP_VIEWBOX_PADDING) / width, (MAP_VIEWBOX_HEIGHT - MAP_VIEWBOX_PADDING) / height);
+  const usableWidth = MAP_VIEWBOX_WIDTH - MAP_VIEWBOX_PADDING_X * 2;
+  const usableHeight = MAP_VIEWBOX_HEIGHT - MAP_VIEWBOX_PADDING_Y * 2;
+  const scale = Math.min(usableWidth / width, usableHeight / height);
 
   return {
     minX,
     maxY,
     scale,
-    offsetX: (MAP_VIEWBOX_WIDTH - width * scale) / 2,
-    offsetY: (MAP_VIEWBOX_HEIGHT - height * scale) / 2,
+    offsetX: MAP_VIEWBOX_PADDING_X + (usableWidth - width * scale) / 2,
+    offsetY: MAP_VIEWBOX_PADDING_Y + (usableHeight - height * scale) / 2,
   };
 }
 
@@ -237,16 +218,16 @@ function buildMapFeatures(geo: any): ProjectedMapFeature[] {
   const projection = createProjection(namedFeatures);
 
   return namedFeatures.map((feature: any) => {
-    const labelSource = feature.properties?.centroid ?? feature.properties?.center;
-    const labelPoint = Array.isArray(labelSource)
-      ? projectPoint(labelSource[0], labelSource[1], projection)
+    const centerSource = feature.properties?.centroid ?? feature.properties?.center;
+    const center = Array.isArray(centerSource)
+      ? projectPoint(centerSource[0], centerSource[1], projection)
       : { x: MAP_VIEWBOX_WIDTH / 2, y: MAP_VIEWBOX_HEIGHT / 2 };
 
     return {
       name: feature.properties.name as string,
       path: featurePath(feature, projection),
-      labelX: labelPoint.x,
-      labelY: labelPoint.y,
+      centerX: center.x,
+      centerY: center.y,
     };
   }).filter(feature => feature.path);
 }
@@ -378,18 +359,7 @@ function ChinaMapCard({ data, loading }: { data: CountItem[] | null; loading: bo
     [provinceMap],
   );
   const displayProvinces = rankedProvinces.slice(0, 10);
-  const provinceLabels = useMemo<MapProvinceLabel[]>(
-    () => mapFeatures
-      .map(feature => ({
-        feature,
-        value: provinceMap.get(feature.name) ?? 0,
-        callout: DENSE_PROVINCE_LABEL_SLOTS[feature.name],
-      }))
-      .filter(label => label.value > 0),
-    [mapFeatures, provinceMap],
-  );
-  const inlineProvinceLabels = provinceLabels.filter(label => !label.callout);
-  const calloutProvinceLabels = provinceLabels.filter(label => label.callout);
+  const mapHotspots = rankedProvinces.slice(0, 3);
   const totalCustomers = useMemo(
     () => Array.from(provinceMap.values()).reduce((total, count) => total + count, 0),
     [provinceMap],
@@ -400,6 +370,9 @@ function ChinaMapCard({ data, loading }: { data: CountItem[] | null; loading: bo
   const top3Share = Math.round(topNShare(rankedProvinces, 3));
   const coverageRate = Math.round((provinceMap.size / MAP_PROVINCE_TOTAL) * 100);
   const hasMapData = totalCustomers > 0;
+  const hoveredFeature = hoveredProvince
+    ? mapFeatures.find(feature => feature.name === hoveredProvince.name)
+    : null;
 
   useEffect(() => {
     let disposed = false;
@@ -418,7 +391,7 @@ function ChinaMapCard({ data, loading }: { data: CountItem[] | null; loading: bo
     };
   }, []);
 
-  const updateMapTooltip = (event: React.MouseEvent<SVGPathElement>, feature: ProjectedMapFeature) => {
+  const updateMapTooltip = (event: React.MouseEvent<SVGElement>, feature: ProjectedMapFeature) => {
     const shell = mapShellRef.current;
     if (!shell) return;
 
@@ -426,10 +399,6 @@ function ChinaMapCard({ data, loading }: { data: CountItem[] | null; loading: bo
     const scaleX = rect.width / Math.max(shell.offsetWidth, 1);
     const scaleY = rect.height / Math.max(shell.offsetHeight, 1);
     const value = provinceMap.get(feature.name) ?? 0;
-    if (value <= 0) {
-      setHoveredProvince(null);
-      return;
-    }
 
     setHoveredProvince({
       name: feature.name,
@@ -489,52 +458,48 @@ function ChinaMapCard({ data, loading }: { data: CountItem[] | null; loading: bo
                   );
                 })}
               </g>
-              <g className="dashboard-map-callouts">
-                {calloutProvinceLabels.map(label => {
-                  const callout = label.callout!;
-                  const boxX = callout.anchor === 'end' ? callout.x - MAP_CALLOUT_WIDTH : callout.x;
-                  const lineEndX = callout.anchor === 'end' ? boxX + MAP_CALLOUT_WIDTH : boxX;
-                  const centerY = callout.y + MAP_CALLOUT_HEIGHT / 2;
+              {hoveredFeature ? (
+                <path
+                  className="dashboard-map-province-highlight"
+                  d={hoveredFeature.path}
+                  fill={provinceFillColor(provinceMap.get(hoveredFeature.name) ?? 0, topCount)}
+                  fillRule="evenodd"
+                />
+              ) : null}
+              <g className="dashboard-map-small-regions">
+                {mapFeatures
+                  .filter(feature => SMALL_REGION_NAMES.has(feature.name) && (provinceMap.get(feature.name) ?? 0) > 0)
+                  .map(feature => {
+                    const value = provinceMap.get(feature.name) ?? 0;
+                    const isHovered = hoveredProvince?.name === feature.name;
 
-                  return (
-                    <g key={label.feature.name} className="dashboard-map-callout">
-                      <line
-                        x1={label.feature.labelX}
-                        y1={label.feature.labelY}
-                        x2={lineEndX}
-                        y2={centerY}
+                    return (
+                      <circle
+                        key={feature.name}
+                        className={`dashboard-map-small-region${isHovered ? ' is-hovered' : ''}`}
+                        cx={feature.centerX}
+                        cy={feature.centerY}
+                        r={isHovered ? 7 : 5.5}
+                        fill={provinceFillColor(value, topCount)}
+                        onMouseEnter={event => updateMapTooltip(event, feature)}
+                        onMouseMove={event => updateMapTooltip(event, feature)}
                       />
-                      <rect
-                        x={boxX}
-                        y={callout.y}
-                        width={MAP_CALLOUT_WIDTH}
-                        height={MAP_CALLOUT_HEIGHT}
-                        rx={7}
-                      />
-                      <text x={boxX + MAP_CALLOUT_WIDTH / 2} y={callout.y + 8}>
-                        <tspan x={boxX + MAP_CALLOUT_WIDTH / 2}>{shortProvinceName(label.feature.name)}</tspan>
-                        <tspan x={boxX + MAP_CALLOUT_WIDTH / 2} dy="1.15em">{label.value}家</tspan>
-                      </text>
-                    </g>
-                  );
-                })}
-              </g>
-              <g className="dashboard-map-labels">
-                {inlineProvinceLabels
-                  .map(label => (
-                    <text
-                      key={label.feature.name}
-                      className="dashboard-map-label"
-                      x={label.feature.labelX}
-                      y={label.feature.labelY}
-                    >
-                      <tspan x={label.feature.labelX} dy="-0.35em">{shortProvinceName(label.feature.name)}</tspan>
-                      <tspan x={label.feature.labelX} dy="1.15em">{label.value}家</tspan>
-                    </text>
-                  ))}
+                    );
+                  })}
               </g>
             </svg>
           </div>
+          {hasMapData ? (
+            <div className="dashboard-map-hotspots">
+              <span>重点省份</span>
+              {mapHotspots.map(item => (
+                <strong key={item.name}>
+                  <i style={{ background: provinceFillColor(item.count, topCount) }} />
+                  {shortProvinceName(item.name)} {item.count}家
+                </strong>
+              ))}
+            </div>
+          ) : null}
           {hoveredProvince ? (
             <div
               className="dashboard-map-tooltip"
@@ -586,7 +551,10 @@ function ChinaMapCard({ data, loading }: { data: CountItem[] | null; loading: bo
           ) : (
             <div className="dashboard-rank-list">
               {displayProvinces.map((item, index) => (
-                <div className="dashboard-rank-row" key={item.name}>
+                <div
+                  className={`dashboard-rank-row${hoveredProvince?.name === item.name ? ' is-hovered' : ''}`}
+                  key={item.name}
+                >
                   <span className="dashboard-rank-index">{index + 1}</span>
                   <span className="dashboard-rank-name">{shortProvinceName(item.name)}</span>
                   <span className="dashboard-rank-bar">

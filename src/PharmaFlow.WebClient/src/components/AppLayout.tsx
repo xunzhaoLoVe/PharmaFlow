@@ -81,6 +81,7 @@ function flattenMenu(items: typeof ALL_MENU_ITEMS): { key: string; label: string
 
 export default function AppLayout() {
   const [collapsed, setCollapsed] = useState(false);
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [darkMode, setDarkMode] = useState(() => localStorage.getItem('themeMode') === 'dark');
   const [language, setLanguage] = useState(() => localStorage.getItem('language') === 'en' ? 'en' : 'zh');
   const [pwdModalOpen, setPwdModalOpen] = useState(false);
@@ -103,6 +104,10 @@ export default function AppLayout() {
   ];
 
   const handleLogout = () => { logout(); navigate('/login'); };
+  const handleMenuNavigate = (key: string) => {
+    navigate(key);
+    setMobileMenuOpen(false);
+  };
 
   const handleChangePwd = async () => {
     try {
@@ -163,8 +168,14 @@ export default function AppLayout() {
   };
 
   return (
-    <div className={`app-shell ${darkMode ? 'is-dark-mode' : ''}`}>
+    <div className={`app-shell ${darkMode ? 'is-dark-mode' : ''}${mobileMenuOpen ? ' is-mobile-menu-open' : ''}`}>
       {/* 侧边栏 */}
+      <button
+        type="button"
+        className="app-mobile-scrim"
+        aria-label="关闭菜单"
+        onClick={() => setMobileMenuOpen(false)}
+      />
       <aside className={`app-sider ${collapsed ? 'is-collapsed' : ''}`}>
         <div className="app-brand">
           <span className="app-brand-mark">药</span>
@@ -174,20 +185,27 @@ export default function AppLayout() {
         </div>
         <Menu theme="light" mode="inline" selectedKeys={[selectedKey]} defaultOpenKeys={openKeys}
           items={menuItems}
-          onClick={({ key }) => navigate(key)} className="app-menu" inlineCollapsed={collapsed} />
+          onClick={({ key }) => handleMenuNavigate(key)} className="app-menu" inlineCollapsed={collapsed && !mobileMenuOpen} />
         <div className="app-sider-footer">
           <Button type="text" block onClick={handleThemeMode}
             icon={darkMode ? <SunOutlined /> : <MoonOutlined />}
-            className="app-sider-action-button">{collapsed ? '' : (darkMode ? '浅色模式' : '深色模式')}</Button>
+            className="app-sider-action-button">{collapsed && !mobileMenuOpen ? '' : (darkMode ? '浅色模式' : '深色模式')}</Button>
           <Button type="text" block onClick={() => setCollapsed(!collapsed)}
             icon={collapsed ? <MenuUnfoldOutlined /> : <MenuFoldOutlined />}
-            className="app-sider-action-button app-collapse-button">{collapsed ? '' : '收起'}</Button>
+            className="app-sider-action-button app-collapse-button">{collapsed && !mobileMenuOpen ? '' : '收起'}</Button>
         </div>
       </aside>
 
       {/* 右侧内容 */}
       <main className="app-main">
         <header className="app-topbar">
+          <Button
+            type="text"
+            icon={<MenuUnfoldOutlined />}
+            className="app-mobile-menu-button"
+            onClick={() => setMobileMenuOpen(true)}
+            aria-label="打开菜单"
+          />
           <div className="app-page-heading">
             <span className="app-page-title">{currentMenu?.label || '工作台'}</span>
             <span className="app-page-path">{pageDescription}</span>
