@@ -13,6 +13,7 @@ public class CollectionService : ICollectionService
     private readonly AppDbContext _db;
     private readonly CollectionExecutionService _executionService;
     private readonly SmartDataCleaner _smartDataCleaner;
+    private readonly IDistributionService _distributionService;
     private readonly ILogger<CollectionService> _logger;
     private const string SummarySyncOperator = "采集汇总同步";
     private static readonly (string FullName, string[] Aliases)[] ProvinceAliases =
@@ -57,11 +58,13 @@ public class CollectionService : ICollectionService
         AppDbContext db,
         CollectionExecutionService executionService,
         SmartDataCleaner smartDataCleaner,
+        IDistributionService distributionService,
         ILogger<CollectionService> logger)
     {
         _db = db;
         _executionService = executionService;
         _smartDataCleaner = smartDataCleaner;
+        _distributionService = distributionService;
         _logger = logger;
     }
 
@@ -452,30 +455,11 @@ public class CollectionService : ICollectionService
         var records = await query.OrderBy(r => r.CreatedAt).ToListAsync();
         var result = new SyncSummaryResultDto { TotalRecords = records.Count };
 
-        var drugs = await _db.Drugs.Where(d => !d.IsDeleted).ToListAsync();
-        var customers = await _db.Customers.Where(c => !c.IsDeleted).ToListAsync();
         var suppliers = await _db.Suppliers.Where(s => !s.IsDeleted).ToListAsync();
-        var drugCodes = new HashSet<string>(await _db.Drugs.IgnoreQueryFilters().Select(d => d.Code).ToListAsync(), StringComparer.OrdinalIgnoreCase);
-        var customerCodes = new HashSet<string>(await _db.Customers.IgnoreQueryFilters().Select(c => c.Code).ToListAsync(), StringComparer.OrdinalIgnoreCase);
         var supplierCodes = new HashSet<string>(await _db.Suppliers.IgnoreQueryFilters().Select(s => s.Code).ToListAsync(), StringComparer.OrdinalIgnoreCase);
-
-        var existingDistributions = await _db.DistributionRecords
-            .Select(d => new
-            {
-                d.Id,
-                d.DrugId,
-                d.BatchNo,
-                d.SupplierId,
-                d.FromCustomerId,
-                d.ToCustomerId,
-                d.Quantity,
-                d.DeliveryOrderNo,
-                d.DistributionDate
-            })
-            .ToListAsync();
-        var distributionByKey = existingDistributions
-            .GroupBy(d => DistributionSyncKey(d.DrugId, d.BatchNo, d.SupplierId, d.FromCustomerId, d.ToCustomerId, d.Quantity, d.DeliveryOrderNo, d.DistributionDate), StringComparer.OrdinalIgnoreCase)
-            .ToDictionary(g => g.Key, g => g.First().Id, StringComparer.OrdinalIgnoreCase);
+        var createdDrugCountBefore = await _db.Drugs.CountAsync(d => !d.IsDeleted);
+        var createdCustomerCountBefore = await _db.Customers.CountAsync(c => !c.IsDeleted);
+        var flowRows = new List<(CollectionRecord Record, DownstreamRecordDto Dto, DateTime DistributionDate)>();
 
         foreach (var record in records)
         {
@@ -498,13 +482,6 @@ public class CollectionService : ICollectionService
                 }
 
                 var specification = GetString(root, "Specification");
-                var drug = FindOrCreateDrug(root, drugName, specification, drugs, drugCodes, result);
-                if (_db.Entry(drug).State == EntityState.Detached)
-                {
-                    _db.Drugs.Add(drug);
-                    RecordCreatedEntity(record, "Drug", drug.Id);
-                }
-
                 var dataType = FirstNonEmpty(GetString(root, "DataType"), GetSourceType(record.Source?.TransformConfig));
                 var isPurchaseFlow = IsPurchaseFlow(dataType);
                 var fromName = FirstNonEmpty(
@@ -518,8 +495,6 @@ public class CollectionService : ICollectionService
                     GetString(root, "CustomerShortName"));
 
                 Supplier? supplier = null;
-                Customer? fromCustomer = null;
-                Customer? toCustomer = null;
                 if (isPurchaseFlow)
                 {
                     supplier = FindOrCreateSupplier(root, FirstNonEmpty(fromName, "江苏神龙药业有限公司"), suppliers, supplierCodes);
@@ -529,28 +504,8 @@ public class CollectionService : ICollectionService
                         RecordCreatedEntity(record, "Supplier", supplier.Id);
                     }
                 }
-                else if (!string.IsNullOrWhiteSpace(fromName))
-                {
-                    fromCustomer = FindOrCreateSourceDealer(root, fromName, null, customers, customerCodes, result);
-                    if (_db.Entry(fromCustomer).State == EntityState.Detached)
-                    {
-                        _db.Customers.Add(fromCustomer);
-                        RecordCreatedEntity(record, "Customer", fromCustomer.Id);
-                    }
-                }
-                if (!string.IsNullOrWhiteSpace(toName))
-                {
-                    toCustomer = isPurchaseFlow
-                        ? FindOrCreatePurchaseDealer(root, toName, GetString(root, "CustomerCode"), customers, customerCodes, result)
-                        : FindOrCreateDestinationCustomer(root, toName, GetString(root, "CustomerCode"), customers, customerCodes, result);
-                    if (_db.Entry(toCustomer).State == EntityState.Detached)
-                    {
-                        _db.Customers.Add(toCustomer);
-                        RecordCreatedEntity(record, "Customer", toCustomer.Id);
-                    }
-                }
 
-                if ((!isPurchaseFlow && fromCustomer == null) || toCustomer == null || (isPurchaseFlow && supplier == null))
+                if ((!isPurchaseFlow && string.IsNullOrWhiteSpace(fromName)) || string.IsNullOrWhiteSpace(toName) || (isPurchaseFlow && supplier == null))
                 {
                     result.SkippedRecords++;
                     continue;
@@ -567,44 +522,76 @@ public class CollectionService : ICollectionService
                 }
 
                 var distributionDate = GetDateTime(root, "DistributionDate") ?? DateTime.UtcNow;
+                var distributionDateDisplay = FormatDateOnly(distributionDate);
+                var syncedDistributionDate = DateTime.TryParse(distributionDateDisplay, out var parsedDistributionDate)
+                    ? parsedDistributionDate
+                    : distributionDate;
                 var deliveryOrderNo = GetString(root, "DeliveryOrderNo");
-                var key = DistributionSyncKey(drug.Id, batchNo, supplier?.Id, fromCustomer?.Id, toCustomer.Id, quantity, deliveryOrderNo, distributionDate);
-                if (distributionByKey.TryGetValue(key, out var existingDistributionId))
-                {
-                    record.TargetEntityType = "DistributionRecord";
-                    record.TargetEntityId = existingDistributionId;
-                    record.UpdatedAt = DateTime.UtcNow;
-                    result.SkippedRecords++;
-                    continue;
-                }
 
-                var distributionRecord = new DistributionRecord
+                flowRows.Add((record, new DownstreamRecordDto
                 {
-                    DrugId = drug.Id,
+                    DrugName = drugName,
+                    Specification = specification,
                     BatchNo = batchNo,
-                    SupplierId = supplier?.Id,
-                    FromCustomerId = isPurchaseFlow ? null : fromCustomer?.Id,
-                    ToCustomerId = toCustomer.Id,
+                    SupplierId = isPurchaseFlow ? supplier?.Id : null,
+                    FromCustomerName = isPurchaseFlow ? string.Empty : fromName,
+                    ToCustomerName = toName,
                     Quantity = quantity,
                     SalesPerson = FirstNonEmpty(GetString(root, "SalesPerson"), GetString(root, "Operator")),
                     DeliveryOrderNo = deliveryOrderNo,
                     TaxedUnitPrice = GetDecimal(root, "TaxedUnitPrice"),
-                    DistributionDate = distributionDate,
-                    DistributionDateDisplay = FormatDateOnly(distributionDate),
-                    Operator = SummarySyncOperator,
+                    DistributionDate = syncedDistributionDate,
+                    DistributionDateDisplay = distributionDateDisplay,
                     Province = GetProvince(root),
-                };
-                _db.DistributionRecords.Add(distributionRecord);
-                distributionByKey[key] = distributionRecord.Id;
-                record.TargetEntityType = "DistributionRecord";
-                record.TargetEntityId = distributionRecord.Id;
-                record.UpdatedAt = DateTime.UtcNow;
-                result.CreatedDistributionRecords++;
+                }, syncedDistributionDate));
             }
             catch
             {
                 result.SkippedRecords++;
             }
+        }
+
+        if (flowRows.Count > 0)
+        {
+            var importResult = await _distributionService.RecordDownstreamBatchAsync(flowRows.Select(r => r.Dto).ToList(), SummarySyncOperator);
+            result.CreatedDistributionRecords += importResult.Imported;
+            result.SkippedRecords += importResult.Skipped;
+
+            var drugIds = flowRows.Select(r => r.Dto.DrugId).Where(id => id != Guid.Empty).Distinct().ToList();
+            var batchNos = flowRows.Select(r => r.Dto.BatchNo).Distinct().ToList();
+            var distributions = await _db.DistributionRecords
+                .Where(d => drugIds.Contains(d.DrugId) && batchNos.Contains(d.BatchNo))
+                .Select(d => new
+                {
+                    d.Id,
+                    d.DrugId,
+                    d.BatchNo,
+                    d.SupplierId,
+                    d.FromCustomerId,
+                    d.ToCustomerId,
+                    d.Quantity,
+                    d.DeliveryOrderNo,
+                    d.DistributionDate
+                })
+                .ToListAsync();
+            var distributionByKey = distributions
+                .GroupBy(d => DistributionSyncKey(d.DrugId, d.BatchNo, d.SupplierId, d.FromCustomerId, d.ToCustomerId, d.Quantity, d.DeliveryOrderNo, d.DistributionDate), StringComparer.OrdinalIgnoreCase)
+                .ToDictionary(g => g.Key, g => g.First().Id, StringComparer.OrdinalIgnoreCase);
+
+            foreach (var (record, dto, distributionDate) in flowRows)
+            {
+                var hasSupplier = dto.SupplierId.HasValue && dto.SupplierId != Guid.Empty;
+                var key = DistributionSyncKey(dto.DrugId, dto.BatchNo, hasSupplier ? dto.SupplierId : null, hasSupplier ? null : dto.FromCustomerId, dto.ToCustomerId, dto.Quantity, dto.DeliveryOrderNo, distributionDate);
+                if (!distributionByKey.TryGetValue(key, out var distributionId))
+                    continue;
+
+                record.TargetEntityType = "DistributionRecord";
+                record.TargetEntityId = distributionId;
+                record.UpdatedAt = DateTime.UtcNow;
+            }
+
+            result.CreatedDrugs = Math.Max(0, await _db.Drugs.CountAsync(d => !d.IsDeleted) - createdDrugCountBefore);
+            result.CreatedCustomers = Math.Max(0, await _db.Customers.CountAsync(c => !c.IsDeleted) - createdCustomerCountBefore);
         }
 
         await _db.SaveChangesAsync();
