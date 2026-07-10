@@ -64,6 +64,8 @@ public class DistributionService : IDistributionService
                 DistributionDate = r.DistributionDate,
                 Operator = r.Operator, Province = r.Province,
                 DistributionDateDisplay = r.DistributionDateDisplay,
+                ImportBatchId = r.ImportBatchId,
+                ImportBatchName = r.ImportBatchName,
             }).ToList(),
             TotalCount = total, PageIndex = pageIndex, PageSize = pageSize,
         };
@@ -141,6 +143,8 @@ public class DistributionService : IDistributionService
                 DeliveryOrderNo = dto.DeliveryOrderNo, TaxedUnitPrice = dto.TaxedUnitPrice,
                 DistributionDate = distributionDate,
                 DistributionDateDisplay = dto.DistributionDateDisplay, Operator = operatorName, Province = dto.Province,
+                ImportBatchId = dto.ImportBatchId,
+                ImportBatchName = dto.ImportBatchName,
             };
             _db.DistributionRecords.Add(record);
             existingByKey[key] = record;
@@ -480,6 +484,8 @@ public class DistributionService : IDistributionService
             DeliveryOrderNo = dto.DeliveryOrderNo, TaxedUnitPrice = dto.TaxedUnitPrice,
             DistributionDate = distributionDate,
             DistributionDateDisplay = dto.DistributionDateDisplay, Operator = operatorName, Province = dto.Province,
+            ImportBatchId = dto.ImportBatchId,
+            ImportBatchName = dto.ImportBatchName,
         });
 
         if (!hasSupplier && fromId.HasValue)
@@ -998,6 +1004,46 @@ public class DistributionService : IDistributionService
 
     public async Task<int> ClearPurchasesByOriginAsync(string origin)
         => await ClearDistributionByOriginAsync(isPurchase: true, origin);
+
+    public async Task<IReadOnlyList<ImportBatchDto>> GetImportBatchesAsync(bool isPurchase)
+    {
+        var query = _db.DistributionRecords
+            .Where(r => r.ImportBatchId.HasValue && r.Operator != SummarySyncOperator);
+
+        query = isPurchase
+            ? query.Where(r => r.SupplierId != null)
+            : query.Where(r => r.SupplierId == null && r.FromCustomerId != null);
+
+        return await query
+            .GroupBy(r => new { Id = r.ImportBatchId!.Value, r.ImportBatchName })
+            .Select(g => new ImportBatchDto
+            {
+                Id = g.Key.Id,
+                Name = g.Key.ImportBatchName ?? "Excel导入",
+                Count = g.Count(),
+                CreatedAt = g.Min(r => r.CreatedAt),
+            })
+            .OrderByDescending(b => b.CreatedAt)
+            .ToListAsync();
+    }
+
+    public async Task<int> ClearImportBatchAsync(Guid batchId)
+    {
+        var records = await _db.DistributionRecords
+            .Where(r => r.ImportBatchId == batchId && r.Operator != SummarySyncOperator)
+            .ToListAsync();
+        if (records.Count == 0)
+            return 0;
+
+        var purchaseRecords = records.Where(r => r.SupplierId != null).ToList();
+        var salesRecords = records.Where(r => r.SupplierId == null).ToList();
+        if (purchaseRecords.Count > 0) await ReversePurchaseInventoryAsync(purchaseRecords);
+        if (salesRecords.Count > 0) await ReverseSalesInventoryAsync(salesRecords);
+
+        _db.DistributionRecords.RemoveRange(records);
+        await _db.SaveChangesAsync();
+        return records.Count;
+    }
 
     private async Task<int> ClearDistributionByOriginAsync(bool isPurchase, string origin)
     {

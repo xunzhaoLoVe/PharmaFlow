@@ -16,6 +16,8 @@ public interface IDistributionService
     Task<int> ClearBySourceAsync(bool isPurchase);
     Task<int> ClearSalesByOriginAsync(string origin);
     Task<int> ClearPurchasesByOriginAsync(string origin);
+    Task<IReadOnlyList<ImportBatchDto>> GetImportBatchesAsync(bool isPurchase);
+    Task<int> ClearImportBatchAsync(Guid batchId);
     Task UpdateDistributionRecordAsync(Guid recordId, decimal newQuantity);
     Task<IReadOnlyList<ChannelConflictDto>> GetChannelConflictsAsync(string? batchNo = null);
 }
@@ -47,6 +49,16 @@ public record DistributionRecordDto
     public DateTime DistributionDate { get; set; }
     public string? Operator { get; set; }
     public string? DistributionDateDisplay { get; set; }
+    public Guid? ImportBatchId { get; set; }
+    public string? ImportBatchName { get; set; }
+}
+
+public record ImportBatchDto
+{
+    public Guid Id { get; set; }
+    public string Name { get; set; } = string.Empty;
+    public int Count { get; set; }
+    public DateTime CreatedAt { get; set; }
 }
 
 public record DistributionTraceDto
@@ -106,4 +118,6 @@ public record DownstreamRecordDto
     public DateTime DistributionDate { get; set; } = DateTime.Now;
     public string? Province { get; set; }
     public string? DistributionDateDisplay { get; set; }
+    public Guid? ImportBatchId { get; set; }
+    public string? ImportBatchName { get; set; }
 }

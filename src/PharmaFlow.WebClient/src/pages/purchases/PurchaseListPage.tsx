@@ -14,7 +14,7 @@ import TableFilters from '../../components/TableFilters';
 import { isDateInRange, type DateRangeValue } from '../../utils/dateRange';
 import { applyTableFilters, type TableFilterField, type TableFilterValues } from '../../utils/tableFilters';
 import { numberSorter, textSorter } from '../../utils/tableSorters';
-import type { DistributionRecordDto, DropdownItem } from '../../types';
+import type { ApiResponse, DistributionRecordDto, DropdownItem, ImportBatchDto } from '../../types';
 
 export default function PurchaseListPage() {
   const canWrite = useAuthStore(s => s.canWrite);
@@ -27,6 +27,8 @@ export default function PurchaseListPage() {
   const [modalOpen, setModalOpen] = useState(false);
   const [drugs, setDrugs] = useState<DropdownItem[]>([]);
   const [customers, setCustomers] = useState<DropdownItem[]>([]);
+  const [importBatches, setImportBatches] = useState<ImportBatchDto[]>([]);
+  const [selectedBatchId, setSelectedBatchId] = useState<string>();
   const [form] = Form.useForm();
 
   const load = useCallback(async () => {
@@ -42,7 +44,12 @@ export default function PurchaseListPage() {
     setDrugs(d); setCustomers(c);
   };
 
-  useEffect(() => { load(); loadMeta(); }, []);
+  const loadImportBatches = async () => {
+    const res = await apiClient.get<ApiResponse<ImportBatchDto[]>>('/distribution/import-batches', { params: { isPurchase: true } });
+    setImportBatches(res.data || []);
+  };
+
+  useEffect(() => { load(); loadMeta(); loadImportBatches().catch(() => {}); }, []);
 
   const handleAdd = () => {
     form.resetFields();
@@ -56,7 +63,16 @@ export default function PurchaseListPage() {
     if (!window.confirm(`确定清空${label}？清空后会同步还原相关库存。`)) return;
     await apiClient.delete('/distribution/clear-purchases', { params: { origin: 'manual' } });
     message.success(`已清空${label}`);
-    load();
+    load(); loadImportBatches();
+  };
+  const handleClearSelectedBatch = async () => {
+    if (!selectedBatchId) return;
+    const batch = importBatches.find(b => b.id === selectedBatchId);
+    if (!window.confirm(`确定清空导入批次「${batch?.name || selectedBatchId}」？清空后会同步还原相关库存。`)) return;
+    await apiClient.delete(`/distribution/import-batches/${selectedBatchId}`);
+    message.success('已清空该导入批次');
+    setSelectedBatchId(undefined);
+    load(); loadImportBatches();
   };
 
   const handleOk = async () => {
@@ -105,6 +121,8 @@ export default function PurchaseListPage() {
       if (!drugCol) { message.error('未找到"药品名称"列'); return; }
       if (!custCol) { message.error('未找到"采购经销商"列'); return; }
 
+      const importBatchId = typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`;
+      const importBatchName = `${file.name} ${dayjs().format('YYYY-MM-DD HH:mm')}`;
       const dtos = []; let skipped = 0;
       for (const row of rows) {
         const drugName = (row[drugCol] || '').trim();
@@ -123,12 +141,15 @@ export default function PurchaseListPage() {
           deliveryOrderNo: deliveryCol ? (row[deliveryCol] || '').trim() : '',
           distributionDate: dateCol ? (row[dateCol] || '').trim() : dayjs().format('YYYY-MM-DD'),
           province: provinceCol ? (row[provinceCol] || '').trim() : '',
+          importBatchId,
+          importBatchName,
         });
       }
         if (dtos.length === 0) { message.warning(`无有效数据，跳过 ${skipped} 条`); return; }
         const res = await apiClient.post('/distribution/downstream/batch', dtos);
         const result = (res as any).data || { imported: dtos.length, skipped: 0, supplemented: 0 };
         message.success(`导入完成: 新增 ${result.imported || 0} 条，跳过重复 ${result.skipped || 0} 条` + (skipped > 0 ? `，跳过无效 ${skipped} 条` : '')); load();
+        loadImportBatches();
       } catch (ex: any) {
         message.error('Excel 解析失败: ' + (ex?.message || '未知错误'));
       } finally {
@@ -147,9 +168,10 @@ export default function PurchaseListPage() {
   const filtered = useMemo(() => {
     return data.filter(d => {
       if (sqCustomer && !(d.toCustomerName || '').includes(sqCustomer)) return false;
+      if (selectedBatchId && d.importBatchId !== selectedBatchId) return false;
       return isDateInRange(d.distributionDate, dateRange);
     });
-  }, [data, sqCustomer, dateRange]);
+  }, [data, sqCustomer, selectedBatchId, dateRange]);
 
   const columns: ColumnsType<DistributionRecordDto> = [
     { title: '药品名称', dataIndex: 'drugName', width: 140,
@@ -208,12 +230,21 @@ export default function PurchaseListPage() {
           onChange={(_, values) => setDateRange(values[0] && values[1] ? [values[0], values[1]] : null)}
           style={{ width: 250 }}
         />
+        <Select
+          allowClear
+          placeholder="导入批次"
+          value={selectedBatchId}
+          onChange={setSelectedBatchId}
+          style={{ width: 260 }}
+          options={importBatches.map(b => ({ label: `${b.name}（${b.count}条）`, value: b.id }))}
+        />
         <TableFilters rows={filtered} fields={filterFields} value={tableFilters} onChange={setTableFilters} />
         {canWrite && <Button type="primary" icon={<PlusOutlined />} onClick={handleAdd}>录入出货</Button>}
         {canWrite && <Upload accept=".xlsx" showUploadList={false} beforeUpload={handleExcelImport}>
           <Button icon={<UploadOutlined />}>导入Excel</Button>
         </Upload>}
         {canWrite && <Button danger icon={<DeleteOutlined />} onClick={handleClearPurchases}>清空 Excel/手工数据</Button>}
+        {canWrite && selectedBatchId && <Button danger icon={<DeleteOutlined />} onClick={handleClearSelectedBatch}>清空该批次</Button>}
       </Space>
       <Table rowKey="id" columns={columns} dataSource={tableData} loading={loading}
         pagination={{ defaultPageSize: 10, showTotal: () => `共 ${tableData.length} 条`, showSizeChanger: true }} />

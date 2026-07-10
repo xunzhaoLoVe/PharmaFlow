@@ -100,6 +100,38 @@ using (var scope = app.Services.CreateScope())
     catch { /* ignore */ }
     finally { db.Database.GetDbConnection().Close(); }
 
+    // Excel 导入批次字段：用于按每次导入管理销售/采购流向
+    try
+    {
+        var conn = db.Database.GetDbConnection();
+        if (conn.State != System.Data.ConnectionState.Open) conn.Open();
+        using var batchCmd = conn.CreateCommand();
+        if (dbProvider == "PostgreSQL")
+        {
+            batchCmd.CommandText = @"ALTER TABLE ""DistributionRecords"" ADD COLUMN IF NOT EXISTS ""ImportBatchId"" uuid NULL";
+            batchCmd.ExecuteNonQuery();
+            batchCmd.CommandText = @"ALTER TABLE ""DistributionRecords"" ADD COLUMN IF NOT EXISTS ""ImportBatchName"" character varying(200) NULL";
+            batchCmd.ExecuteNonQuery();
+        }
+        else
+        {
+            batchCmd.CommandText = "SELECT COUNT(*) FROM pragma_table_info('DistributionRecords') WHERE name = 'ImportBatchId'";
+            if ((long)batchCmd.ExecuteScalar()! == 0)
+            {
+                batchCmd.CommandText = "ALTER TABLE DistributionRecords ADD COLUMN ImportBatchId TEXT NULL";
+                batchCmd.ExecuteNonQuery();
+            }
+            batchCmd.CommandText = "SELECT COUNT(*) FROM pragma_table_info('DistributionRecords') WHERE name = 'ImportBatchName'";
+            if ((long)batchCmd.ExecuteScalar()! == 0)
+            {
+                batchCmd.CommandText = "ALTER TABLE DistributionRecords ADD COLUMN ImportBatchName TEXT NULL";
+                batchCmd.ExecuteNonQuery();
+            }
+        }
+        conn.Close();
+    }
+    catch { /* ignore */ }
+
     // 采集同步追踪表：EnsureCreated 不会为已存在的数据库创建新表，需按数据库类型手动建表
     try
     {

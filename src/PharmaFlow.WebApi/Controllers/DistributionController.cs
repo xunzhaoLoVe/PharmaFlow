@@ -141,6 +141,21 @@ public class DistributionController : ControllerBase
         return Ok(ApiResponse.Ok($"已清空Excel/手工采购数据 {count} 条"));
     }
 
+    [HttpGet("import-batches")]
+    public async Task<ActionResult<ApiResponse<IReadOnlyList<ImportBatchDto>>>> GetImportBatches(
+        [FromQuery] bool isPurchase)
+    {
+        var batches = await _distributionService.GetImportBatchesAsync(isPurchase);
+        return Ok(ApiResponse<IReadOnlyList<ImportBatchDto>>.Ok(batches));
+    }
+
+    [HttpDelete("import-batches/{batchId:guid}")]
+    public async Task<ActionResult<ApiResponse>> ClearImportBatch(Guid batchId)
+    {
+        var count = await _distributionService.ClearImportBatchAsync(batchId);
+        return Ok(ApiResponse.Ok($"已清空该导入批次 {count} 条"));
+    }
+
     [HttpGet("conflicts")]
     public async Task<ActionResult<ApiResponse<IReadOnlyList<ChannelConflictDto>>>> GetConflicts(
         [FromQuery] string? batchNo = null)

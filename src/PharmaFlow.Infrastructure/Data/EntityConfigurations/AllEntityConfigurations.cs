@@ -165,6 +165,7 @@ public class DistributionRecordConfiguration : IEntityTypeConfiguration<Distribu
         builder.HasKey(e => e.Id);
         builder.Property(e => e.BatchNo).HasMaxLength(100).IsRequired();
         builder.Property(e => e.Operator).HasMaxLength(50);
+        builder.Property(e => e.ImportBatchName).HasMaxLength(200);
         builder.Property(e => e.SalesPerson).HasMaxLength(50);
         builder.Property(e => e.DeliveryOrderNo).HasMaxLength(100);
         builder.Property(e => e.Quantity).HasColumnType("decimal(18,2)");

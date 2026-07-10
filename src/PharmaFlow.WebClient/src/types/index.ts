@@ -202,12 +202,21 @@ export interface DistributionRecordDto {
   operator?: string;
   province?: string;
   distributionDateDisplay?: string;
+  importBatchId?: string;
+  importBatchName?: string;
 }
 
 export interface DistributionImportResultDto {
   imported: number;
   skipped: number;
   supplemented: number;
+}
+
+export interface ImportBatchDto {
+  id: string;
+  name: string;
+  count: number;
+  createdAt: string;
 }
 
 export interface DownstreamRecordDto {
@@ -226,6 +235,8 @@ export interface DownstreamRecordDto {
   distributionDate: string;
   distributionDateDisplay?: string;
   province?: string;
+  importBatchId?: string;
+  importBatchName?: string;
 }
 
 // ── 仪表盘 ──
