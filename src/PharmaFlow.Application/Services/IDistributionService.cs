@@ -29,6 +29,7 @@ public record DistributionImportResultDto
     public int Imported { get; set; }
     public int Skipped { get; set; }
     public int Supplemented { get; set; }
+    public List<DistributionImportDetailDto> Details { get; set; } = new();
 }
 
 public record DistributionRecordDto
@@ -114,6 +115,8 @@ public record TraceTreeNode
 
 public record ChannelConflictDto
 {
+    public string WarningType { get; set; } = "跨区域流向";
+    public string Severity { get; set; } = "中";
     public string DrugName { get; set; } = string.Empty;
     public string BatchNo { get; set; } = string.Empty;
     public string Distributor { get; set; } = string.Empty;
@@ -121,7 +124,11 @@ public record ChannelConflictDto
     public string ActualCustomer { get; set; } = string.Empty;
     public string ActualRegion { get; set; } = string.Empty;
     public decimal Quantity { get; set; }
+    public decimal? BaselineQuantity { get; set; }
+    public decimal? Ratio { get; set; }
     public DateTime Date { get; set; }
+    public string Reason { get; set; } = string.Empty;
+    public string Suggestion { get; set; } = string.Empty;
 }
 
 public record DownstreamRecordDto

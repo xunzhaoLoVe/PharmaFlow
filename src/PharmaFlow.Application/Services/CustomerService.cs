@@ -423,13 +423,8 @@ public class CustomerService : ICustomerService
         if (!string.IsNullOrWhiteSpace(source.Address)) c.Address = source.Address;
         if (!string.IsNullOrWhiteSpace(source.Province)) c.Province = source.Province;
         if (!string.IsNullOrWhiteSpace(source.SalesPerson)) c.SalesPerson = source.SalesPerson;
-        if (!string.IsNullOrWhiteSpace(source.DrugName))
-        {
-            if (!string.IsNullOrWhiteSpace(c.DrugName) && c.DrugName != source.DrugName && !c.DrugName.Contains(source.DrugName))
-                c.DrugName = c.DrugName + "\n" + source.DrugName;
-            else if (string.IsNullOrWhiteSpace(c.DrugName))
-                c.DrugName = source.DrugName;
-        }
+        if (string.IsNullOrWhiteSpace(c.DrugName) && !string.IsNullOrWhiteSpace(source.DrugName))
+            c.DrugName = source.DrugName;
         if (!string.IsNullOrWhiteSpace(source.CustomerTypeName) && Enum.TryParse<CustomerType>(source.CustomerTypeName, out var ct))
             c.CustomerType = ct;
         if (source.Level.HasValue) c.Level = (DistributorLevel?)source.Level.Value;

@@ -680,8 +680,6 @@ export default function DashboardPage() {
             badge={dataQualityStatus.label}
             badgeTone={dataQualityStatus.tone}
             description={`经销商层级样本 ${distributorLevelTotal} 家`}
-            metaLabel="未分级占比"
-            metaValue={`${formatPercent(unclassifiedRate, 1)}%`}
           />
         </Col>
         <Col xs={24} sm={12} xl={6}>
@@ -789,9 +787,9 @@ export default function DashboardPage() {
                           innerRadius={66}
                           outerRadius={112}
                           paddingAngle={4}
-                          labelLine={{ stroke: '#94a3b8' }}
-                          label={({ name, count, percent }: any) => (
-                            percent >= 0.07 ? `${name}: ${count}家` : ''
+                          labelLine={{ stroke: '#94a3b8', strokeWidth: 1 }}
+                          label={({ name, count }: any) => (
+                            count > 0 ? `${name}: ${count}家` : ''
                           )}
                         >
                           {dealerLevelData.map((_, index) => (

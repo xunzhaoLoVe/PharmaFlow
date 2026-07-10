@@ -219,7 +219,15 @@ export default function ReportPage() {
         customerName: next.customerName || undefined,
       });
       setReport(data);
-      saveFilters(next);
+      const returnedFilters = {
+        ...next,
+        startDate: dayjs(data.startDate).format('YYYY-MM-DD'),
+        endDate: dayjs(data.endDate).format('YYYY-MM-DD'),
+        granularity: data.granularity || next.granularity,
+      };
+      setFilters(returnedFilters);
+      setDraft(returnedFilters);
+      saveFilters(returnedFilters);
     } finally {
       setLoading(false);
     }

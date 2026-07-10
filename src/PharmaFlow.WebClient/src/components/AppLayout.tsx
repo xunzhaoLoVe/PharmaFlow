@@ -55,7 +55,7 @@ const PAGE_DESCRIPTIONS: Record<string, string> = {
   '/sales': '下游流转销售记录管理',
   '/inventory': '经销商库存与低库存预警',
   '/distribution': '按批号追踪药品流向',
-  '/distribution/conflicts': '跨区域流向风险预警',
+  '/distribution/conflicts': '多规则串货风险预警',
   '/reports': '销售、库存与渠道统计分析',
   '/users': '系统用户与角色权限管理',
   '/datacollection/sources': '采集源配置与任务触发',

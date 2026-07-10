@@ -30,6 +30,32 @@ public class ReportService : IReportService
             .Select(c => (Guid?)c.Id)
             .FirstOrDefaultAsync();
 
+        var latestRecordQuery = _db.DistributionRecords
+            .Include(r => r.Drug)
+            .Include(r => r.ToCustomer)
+            .Include(r => r.FromCustomer)
+            .Include(r => r.Supplier)
+            .AsNoTracking()
+            .AsQueryable();
+        if (!string.IsNullOrWhiteSpace(drugName))
+            latestRecordQuery = latestRecordQuery.Where(r => r.Drug.Name.Contains(drugName));
+        if (!string.IsNullOrWhiteSpace(customerName))
+            latestRecordQuery = latestRecordQuery.Where(r =>
+                (r.ToCustomer != null && r.ToCustomer.Name.Contains(customerName))
+                || (r.FromCustomer != null && r.FromCustomer.Name.Contains(customerName))
+                || (r.Supplier != null && r.Supplier.Name.Contains(customerName)));
+
+        var latestRecordDate = await latestRecordQuery
+            .OrderByDescending(r => r.DistributionDate)
+            .Select(r => (DateTime?)r.DistributionDate)
+            .FirstOrDefaultAsync();
+        if (latestRecordDate.HasValue && start > latestRecordDate.Value.Date)
+        {
+            end = latestRecordDate.Value.Date;
+            start = end.AddDays(-29);
+            endExclusive = end.AddDays(1);
+        }
+
         var distributionQuery = _db.DistributionRecords
             .Include(r => r.Drug)
             .Include(r => r.ToCustomer)

@@ -125,7 +125,7 @@ public class DistributionService : IDistributionService
 
             if (seenKeys != null && !seenKeys.Add(key))
             {
-                AddImportDetail(dto, false, "重复", "本次导入内已有相同数据", distributionDate);
+                AddImportDetail(dto, false, "重复", "本次导入内已有相同数据", distributionDate, result);
                 result.Skipped++;
                 continue;
             }
@@ -133,7 +133,7 @@ public class DistributionService : IDistributionService
             if (existingByKey.TryGetValue(key, out var existing))
             {
                 if (SupplementDistributionRecord(existing, dto, distributionDate)) result.Supplemented++;
-                AddImportDetail(dto, false, "重复", "销售/采购管理已有相同数据", distributionDate);
+                AddImportDetail(dto, false, "重复", "销售/采购管理已有相同数据", distributionDate, result);
                 result.Skipped++;
                 continue;
             }
@@ -153,7 +153,7 @@ public class DistributionService : IDistributionService
             _db.DistributionRecords.Add(record);
             if (deduplicateWithinBatch)
                 existingByKey[key] = record;
-            AddImportDetail(dto, fromCustomerId == self.Id && record.SupplierId.HasValue, "成功", "已导入", distributionDate);
+            AddImportDetail(dto, fromCustomerId == self.Id && record.SupplierId.HasValue, "成功", "已导入", distributionDate, result);
 
             if (!hasSupplier && fromCustomerId.HasValue)
             {
@@ -181,12 +181,12 @@ public class DistributionService : IDistributionService
         return result;
     }
 
-    private void AddImportDetail(DownstreamRecordDto dto, bool isPurchase, string status, string reason, DateTime distributionDate)
+    private void AddImportDetail(DownstreamRecordDto dto, bool isPurchase, string status, string reason, DateTime distributionDate, DistributionImportResultDto? result = null)
     {
         if (!dto.ImportBatchId.HasValue || dto.ImportBatchId == Guid.Empty)
             return;
 
-        _db.DistributionImportDetails.Add(new DistributionImportDetail
+        var detail = new DistributionImportDetail
         {
             ImportBatchId = dto.ImportBatchId.Value,
             ImportBatchName = string.IsNullOrWhiteSpace(dto.ImportBatchName) ? "Excel导入" : dto.ImportBatchName,
@@ -202,6 +202,26 @@ public class DistributionService : IDistributionService
             Quantity = dto.Quantity,
             DistributionDate = dto.DistributionDateDisplay ?? distributionDate.ToString("yyyy-MM-dd"),
             Province = dto.Province,
+        };
+        _db.DistributionImportDetails.Add(detail);
+        result?.Details.Add(new DistributionImportDetailDto
+        {
+            Id = detail.Id,
+            ImportBatchId = detail.ImportBatchId,
+            ImportBatchName = detail.ImportBatchName,
+            IsPurchase = detail.IsPurchase,
+            RowNumber = detail.RowNumber,
+            Status = detail.Status,
+            Reason = detail.Reason,
+            DrugName = detail.DrugName,
+            Specification = detail.Specification,
+            BatchNo = detail.BatchNo,
+            FromCustomerName = detail.FromCustomerName,
+            ToCustomerName = detail.ToCustomerName,
+            Quantity = detail.Quantity,
+            DistributionDate = detail.DistributionDate,
+            Province = detail.Province,
+            CreatedAt = detail.CreatedAt,
         });
     }
 
@@ -442,7 +462,7 @@ public class DistributionService : IDistributionService
             return CustomerType.基层医疗机构;
         if (ContainsAny(text, "医院", "卫生院"))
             return CustomerType.医院;
-        if (ContainsAny(text, "药店", "药房", "大药房", "医药连锁"))
+        if (ContainsAny(text, "药店", "药房", "大药房", "医药连锁", "零售连锁", "连锁药"))
             return CustomerType.药店;
         if (ContainsAny(text, "诊所", "门诊"))
             return CustomerType.诊所;
@@ -452,7 +472,7 @@ public class DistributionService : IDistributionService
     private static DistributorRole? InferDistributorRole(string? name)
     {
         var text = name ?? string.Empty;
-        if (ContainsAny(text, "配送")) return DistributorRole.配送公司;
+        if (ContainsAny(text, "配送", "药物流", "物流")) return DistributorRole.配送公司;
         if (ContainsAny(text, "代理")) return DistributorRole.代理商;
         return DistributorRole.商业公司;
     }
@@ -1037,6 +1057,18 @@ public class DistributionService : IDistributionService
     public async Task<int> ClearPurchasesByOriginAsync(string origin)
         => await ClearDistributionByOriginAsync(isPurchase: true, origin);
 
+    private static string NormalizeImportStatus(string? status)
+    {
+        var value = (status ?? string.Empty).Trim();
+        return value switch
+        {
+            "鎴愬姛" => "成功",
+            "閲嶅" => "重复",
+            "鏃犳晥" => "无效",
+            _ => value,
+        };
+    }
+
     public async Task<IReadOnlyList<ImportBatchDto>> GetImportBatchesAsync(bool isPurchase)
     {
         var recordQuery = _db.DistributionRecords
@@ -1059,20 +1091,35 @@ public class DistributionService : IDistributionService
             .ToListAsync();
 
         var recordBatchIds = recordBatches.Select(b => b.Id).ToHashSet();
-        var detailBatches = await _db.DistributionImportDetails
+        var detailRows = await _db.DistributionImportDetails
             .Where(d => d.IsPurchase == isPurchase)
-            .GroupBy(d => new { d.ImportBatchId, d.ImportBatchName })
-            .Select(g => new ImportBatchDto
+            .AsNoTracking()
+            .Select(d => new
             {
-                Id = g.Key.ImportBatchId,
-                Name = g.Key.ImportBatchName,
-                Count = g.Count(),
-                SuccessCount = g.Count(d => d.Status == "成功"),
-                DuplicateCount = g.Count(d => d.Status == "重复"),
-                InvalidCount = g.Count(d => d.Status == "无效"),
-                CreatedAt = g.Min(d => d.CreatedAt),
+                d.ImportBatchId,
+                d.ImportBatchName,
+                d.Status,
+                d.CreatedAt,
             })
             .ToListAsync();
+
+        var detailBatches = detailRows
+            .GroupBy(d => new { d.ImportBatchId, d.ImportBatchName })
+            .Select(g =>
+            {
+                var normalized = g.Select(d => NormalizeImportStatus(d.Status)).ToList();
+                return new ImportBatchDto
+                {
+                    Id = g.Key.ImportBatchId,
+                    Name = g.Key.ImportBatchName,
+                    Count = g.Count(),
+                    SuccessCount = normalized.Count(s => s == "成功"),
+                    DuplicateCount = normalized.Count(s => s == "重复"),
+                    InvalidCount = normalized.Count(s => s == "无效"),
+                    CreatedAt = g.Min(d => d.CreatedAt),
+                };
+            })
+            .ToList();
 
         var detailByBatchId = detailBatches.ToDictionary(b => b.Id);
         return recordBatches
@@ -1081,10 +1128,10 @@ public class DistributionService : IDistributionService
                 if (!detailByBatchId.TryGetValue(b.Id, out var detailBatch))
                     return b;
 
-                b.Count = detailBatch.Count;
-                b.SuccessCount = detailBatch.SuccessCount;
+                b.SuccessCount = detailBatch.SuccessCount > 0 ? detailBatch.SuccessCount : b.SuccessCount;
                 b.DuplicateCount = detailBatch.DuplicateCount;
                 b.InvalidCount = detailBatch.InvalidCount;
+                b.Count = Math.Max(detailBatch.Count, b.SuccessCount + b.DuplicateCount + b.InvalidCount);
                 return b;
             })
             .Concat(detailBatches.Where(b => !recordBatchIds.Contains(b.Id)))
@@ -1105,7 +1152,7 @@ public class DistributionService : IDistributionService
                 ImportBatchName = d.ImportBatchName,
                 IsPurchase = d.IsPurchase,
                 RowNumber = d.RowNumber,
-                Status = d.Status,
+                Status = NormalizeImportStatus(d.Status),
                 Reason = d.Reason,
                 DrugName = d.DrugName,
                 Specification = d.Specification,
@@ -1449,29 +1496,312 @@ public class DistributionService : IDistributionService
         var query = _db.DistributionRecords.Include(r => r.Drug).Include(r => r.ToCustomer).Include(r => r.FromCustomer).Include(r => r.Supplier).AsNoTracking().AsQueryable();
         if (!string.IsNullOrWhiteSpace(batchNo)) query = query.Where(r => r.BatchNo.Contains(batchNo));
         var records = await query.OrderBy(r => r.DistributionDate).ToListAsync();
-        // 从供应商直接出货的记录找到一级经销商（不再通过SELF）
-        var level1 = records.Where(r => r.SupplierId != null && r.ToCustomer != null).ToList();
+        var warningKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        void AddWarning(ChannelConflictDto warning)
+        {
+            var key = $"{warning.WarningType}|{warning.DrugName}|{warning.BatchNo}|{warning.ActualCustomer}|{warning.Date:yyyy-MM-dd}|{warning.Quantity:0.####}";
+            if (warningKeys.Add(key))
+                result.Add(warning);
+        }
+
+        // 规则1：跨区域流向。以厂家/供应商直发的一级经销商省份作为授权区域，向下游传播检查。
+        var level1 = records
+            .Where(r => r.SupplierId != null && r.ToCustomer != null && r.Quantity > 0)
+            .ToList();
         foreach (var l1 in level1)
         {
             var t1Prov = l1.ToCustomer!.Province ?? ""; var t1Name = l1.ToCustomer!.Name;
             if (string.IsNullOrEmpty(t1Prov)) continue;
-            var level2 = records.Where(r => r.FromCustomerId == l1.ToCustomerId && r.ToCustomer != null).ToList();
+            var level2 = records
+                .Where(r => r.FromCustomerId == l1.ToCustomerId
+                    && r.ToCustomer != null
+                    && r.DrugId == l1.DrugId
+                    && r.BatchNo == l1.BatchNo
+                    && r.Quantity > 0)
+                .ToList();
             foreach (var l2 in level2)
             {
                 var l2Prov = l2.ToCustomer!.Province ?? "";
                 if (!string.IsNullOrEmpty(l2Prov) && t1Prov != l2Prov)
-                    result.Add(new ChannelConflictDto { DrugName = l2.Drug.Name, BatchNo = l2.BatchNo, Distributor = t1Name, ExpectedRegion = t1Prov, ActualCustomer = l2.ToCustomer!.Name, ActualRegion = l2Prov, Quantity = l2.Quantity, Date = l2.DistributionDate });
-                var level3 = records.Where(r => r.FromCustomerId == l2.ToCustomerId && r.ToCustomer != null).ToList();
+                    AddWarning(new ChannelConflictDto
+                    {
+                        WarningType = "跨区域流向",
+                        Severity = "高",
+                        DrugName = l2.Drug.Name,
+                        BatchNo = l2.BatchNo,
+                        Distributor = t1Name,
+                        ExpectedRegion = t1Prov,
+                        ActualCustomer = l2.ToCustomer!.Name,
+                        ActualRegion = l2Prov,
+                        Quantity = l2.Quantity,
+                        Date = l2.DistributionDate,
+                        Reason = $"一级经销商所属区域为{t1Prov}，该批次流向了{l2Prov}客户。",
+                        Suggestion = "核查该经销商授权区域、下游销售凭证和终端真实需求。"
+                    });
+                var level3 = records
+                    .Where(r => r.FromCustomerId == l2.ToCustomerId
+                        && r.ToCustomer != null
+                        && r.DrugId == l1.DrugId
+                        && r.BatchNo == l1.BatchNo
+                        && r.Quantity > 0)
+                    .ToList();
                 foreach (var l3 in level3)
                 {
                     var l3Prov = l3.ToCustomer!.Province ?? "";
                     if (!string.IsNullOrEmpty(l3Prov) && t1Prov != l3Prov)
-                        result.Add(new ChannelConflictDto { DrugName = l3.Drug.Name, BatchNo = l3.BatchNo, Distributor = t1Name, ExpectedRegion = t1Prov, ActualCustomer = l3.ToCustomer!.Name, ActualRegion = l3Prov, Quantity = l3.Quantity, Date = l3.DistributionDate });
+                        AddWarning(new ChannelConflictDto
+                        {
+                            WarningType = "跨区域流向",
+                            Severity = "高",
+                            DrugName = l3.Drug.Name,
+                            BatchNo = l3.BatchNo,
+                            Distributor = t1Name,
+                            ExpectedRegion = t1Prov,
+                            ActualCustomer = l3.ToCustomer!.Name,
+                            ActualRegion = l3Prov,
+                            Quantity = l3.Quantity,
+                            Date = l3.DistributionDate,
+                            Reason = $"一级经销商所属区域为{t1Prov}，二级/三级下游继续流向了{l3Prov}客户。",
+                            Suggestion = "沿批号追踪完整链路，核对二级/三级经销商是否存在跨区转售。"
+                        });
                 }
             }
         }
-        return result;
+
+        var terminalRecords = records
+            .Where(r => r.ToCustomerId.HasValue
+                && r.ToCustomer != null
+                && r.ToCustomer.CustomerType != CustomerType.商业
+                && r.Quantity > 0)
+            .ToList();
+
+        var dailyFlows = terminalRecords
+            .GroupBy(r => new { r.ToCustomerId, r.DrugId, Date = r.DistributionDate.Date })
+            .Select(g =>
+            {
+                var first = g.First();
+                return new DailyTerminalFlow(
+                    first.ToCustomerId!.Value,
+                    first.ToCustomer!.Name,
+                    first.ToCustomer.Province ?? first.Province ?? "",
+                    first.DrugId,
+                    first.Drug.Name,
+                    g.Key.Date,
+                    g.Sum(r => r.Quantity),
+                    string.Join("、", g.Select(r => r.BatchNo).Where(b => !string.IsNullOrWhiteSpace(b)).Distinct().Take(3)),
+                    string.Join("、", g.Select(r => r.FromCustomer?.Name ?? r.Supplier?.Name ?? "未知来源").Where(n => !string.IsNullOrWhiteSpace(n)).Distinct().Take(3)));
+            })
+            .OrderBy(x => x.Date)
+            .ToList();
+
+        // 规则2：终端单日异常放量。例：历史日均约100，某天突然1000。
+        foreach (var flow in dailyFlows)
+        {
+            var history = dailyFlows
+                .Where(x => x.CustomerId == flow.CustomerId
+                    && x.DrugId == flow.DrugId
+                    && x.Date < flow.Date
+                    && x.Date >= flow.Date.AddDays(-120))
+                .ToList();
+            if (history.Count < 3) continue;
+
+            var avg = history.Average(x => x.Quantity);
+            if (avg <= 0) continue;
+
+            var ratio = flow.Quantity / avg;
+            if (flow.Quantity >= 100 && ratio >= 4m && flow.Quantity - avg >= 100)
+            {
+                AddWarning(new ChannelConflictDto
+                {
+                    WarningType = "终端突增",
+                    Severity = ratio >= 8m || flow.Quantity >= 1000 ? "高" : "中",
+                    DrugName = flow.DrugName,
+                    BatchNo = flow.BatchNo,
+                    Distributor = flow.SourceName,
+                    ExpectedRegion = $"历史日均 {avg:0.##}",
+                    ActualCustomer = flow.CustomerName,
+                    ActualRegion = flow.Province,
+                    Quantity = flow.Quantity,
+                    BaselineQuantity = Math.Round(avg, 2),
+                    Ratio = Math.Round(ratio, 2),
+                    Date = flow.Date,
+                    Reason = $"该终端近120天同药品日均采购约{avg:0.##}，本日采购{flow.Quantity:0.##}，达到历史均值{ratio:0.#}倍。",
+                    Suggestion = "核查终端处方/销售消化能力、是否代其他区域收货、是否存在集中转卖。"
+                });
+            }
+        }
+
+        // 规则3：终端短期囤货。7日滚动采购显著高于历史节奏。
+        foreach (var group in dailyFlows.GroupBy(x => new { x.CustomerId, x.DrugId }))
+        {
+            var ordered = group.OrderBy(x => x.Date).ToList();
+            foreach (var flow in ordered)
+            {
+                var windowStart = flow.Date.AddDays(-6);
+                var recent = ordered.Where(x => x.Date >= windowStart && x.Date <= flow.Date).ToList();
+                var history = ordered.Where(x => x.Date < windowStart && x.Date >= windowStart.AddDays(-90)).ToList();
+                if (history.Count < 6) continue;
+
+                var recentSum = recent.Sum(x => x.Quantity);
+                var baseline7 = history.Average(x => x.Quantity) * 7;
+                if (baseline7 <= 0) continue;
+
+                var ratio = recentSum / baseline7;
+                if (recentSum >= 500 && ratio >= 3m && recentSum - baseline7 >= 300)
+                {
+                    AddWarning(new ChannelConflictDto
+                    {
+                        WarningType = "短期囤货",
+                        Severity = ratio >= 5m || recentSum >= 1500 ? "高" : "中",
+                        DrugName = flow.DrugName,
+                        BatchNo = string.Join("、", recent.Select(x => x.BatchNo).Where(b => !string.IsNullOrWhiteSpace(b)).Distinct().Take(3)),
+                        Distributor = string.Join("、", recent.Select(x => x.SourceName).Where(n => !string.IsNullOrWhiteSpace(n)).Distinct().Take(3)),
+                        ExpectedRegion = $"历史7日基准 {baseline7:0.##}",
+                        ActualCustomer = flow.CustomerName,
+                        ActualRegion = flow.Province,
+                        Quantity = recentSum,
+                        BaselineQuantity = Math.Round(baseline7, 2),
+                        Ratio = Math.Round(ratio, 2),
+                        Date = flow.Date,
+                        Reason = $"该终端7日累计采购{recentSum:0.##}，约为历史7日基准{ratio:0.#}倍。",
+                        Suggestion = "核查近期是否有真实临床/零售需求支撑，关注库存是否快速外流。"
+                    });
+                }
+            }
+        }
+
+        // 规则4：经销层级倒挂或同级调拨。正常链路应一级->二级->三级->终端。
+        foreach (var record in records.Where(r => r.FromCustomer?.CustomerType == CustomerType.商业
+            && r.ToCustomer?.CustomerType == CustomerType.商业
+            && r.FromCustomer.Level.HasValue
+            && r.ToCustomer.Level.HasValue
+            && r.Quantity > 0))
+        {
+            var fromLevel = (int)record.FromCustomer!.Level!.Value;
+            var toLevel = (int)record.ToCustomer!.Level!.Value;
+            if (toLevel > fromLevel) continue;
+
+            var isReverse = toLevel < fromLevel;
+            AddWarning(new ChannelConflictDto
+            {
+                WarningType = isReverse ? "层级倒挂" : "同级调拨",
+                Severity = isReverse ? "高" : "中",
+                DrugName = record.Drug.Name,
+                BatchNo = record.BatchNo,
+                Distributor = record.FromCustomer.Name,
+                ExpectedRegion = $"{record.FromCustomer.Level} -> 下级经销商",
+                ActualCustomer = record.ToCustomer.Name,
+                ActualRegion = record.ToCustomer.Province ?? record.Province ?? "",
+                Quantity = record.Quantity,
+                Date = record.DistributionDate,
+                Reason = isReverse
+                    ? $"药品从{record.FromCustomer.Level}流向{record.ToCustomer.Level}，链路方向倒挂。"
+                    : $"药品在两个{record.FromCustomer.Level}之间流转，可能是横向调拨。",
+                Suggestion = "核查调拨审批、授权区域和后续去向，确认不是规避正常渠道。"
+            });
+        }
+
+        // 规则5：单个一级经销商名下的同批号跨省扩散。
+        // 同一批号被厂家分配给多个省份一级经销商是正常现象；这里按一级经销商链路聚合，避免全批号误报。
+        var terminalWithRootDealer = terminalRecords
+            .Select(r => new
+            {
+                Record = r,
+                RootDealer = ResolveRootDealer(r, records),
+                TerminalProvince = r.ToCustomer?.Province ?? r.Province ?? ""
+            })
+            .Where(x => x.RootDealer != null && !string.IsNullOrWhiteSpace(x.RootDealer.Province) && !string.IsNullOrWhiteSpace(x.TerminalProvince))
+            .ToList();
+
+        foreach (var group in terminalWithRootDealer.GroupBy(x => new { x.Record.DrugId, x.Record.BatchNo, RootDealerId = x.RootDealer!.Id }))
+        {
+            var root = group.First().RootDealer!;
+            var outsideProvinceGroups = group
+                .Where(x => !SameText(x.TerminalProvince, root.Province))
+                .GroupBy(x => x.TerminalProvince)
+                .ToList();
+            if (outsideProvinceGroups.Count < 2) continue;
+
+            var firstDate = group.Min(x => x.Record.DistributionDate.Date);
+            var lastDate = group.Max(x => x.Record.DistributionDate.Date);
+            if ((lastDate - firstDate).TotalDays > 45) continue;
+
+            var sample = group.OrderByDescending(x => x.Record.DistributionDate).First().Record;
+            var outsideQuantity = outsideProvinceGroups.Sum(g => g.Sum(x => x.Record.Quantity));
+            AddWarning(new ChannelConflictDto
+            {
+                WarningType = "一级跨省扩散",
+                Severity = outsideProvinceGroups.Count >= 3 || outsideQuantity >= 1000 ? "高" : "中",
+                DrugName = sample.Drug.Name,
+                BatchNo = sample.BatchNo,
+                Distributor = root.Name,
+                ExpectedRegion = root.Province,
+                ActualCustomer = $"外省终端 {group.Where(x => !SameText(x.TerminalProvince, root.Province)).Select(x => x.Record.ToCustomerId).Distinct().Count()} 家",
+                ActualRegion = string.Join("、", outsideProvinceGroups.Select(g => g.Key).Take(5)),
+                Quantity = outsideQuantity,
+                Date = lastDate,
+                Reason = $"{root.Name}所属区域为{root.Province}，同一批号在45天内继续流向{outsideProvinceGroups.Count}个外省终端区域。",
+                Suggestion = "核查该一级经销商名下同批号下游明细，确认是否存在外省拆分转卖；同批号由其他省一级经销商正常采购不计入本规则。"
+            });
+        }
+
+        return result
+            .OrderByDescending(x => SeverityRank(x.Severity))
+            .ThenByDescending(x => x.Date)
+            .ToList();
     }
+
+    private record DailyTerminalFlow(
+        Guid CustomerId,
+        string CustomerName,
+        string Province,
+        Guid DrugId,
+        string DrugName,
+        DateTime Date,
+        decimal Quantity,
+        string BatchNo,
+        string SourceName);
+
+    private record RootDealerInfo(Guid Id, string Name, string Province);
+
+    private static RootDealerInfo? ResolveRootDealer(DistributionRecord terminalRecord, List<DistributionRecord> records)
+    {
+        if (!terminalRecord.FromCustomerId.HasValue)
+            return null;
+
+        var current = terminalRecord.FromCustomerId.Value;
+        var visited = new HashSet<Guid>();
+        while (visited.Add(current))
+        {
+            var previous = records
+                .Where(r => r.DrugId == terminalRecord.DrugId
+                    && r.BatchNo == terminalRecord.BatchNo
+                    && r.ToCustomerId == current
+                    && r.Quantity > 0
+                    && r.DistributionDate <= terminalRecord.DistributionDate)
+                .OrderByDescending(r => r.DistributionDate)
+                .FirstOrDefault();
+
+            if (previous?.ToCustomer == null)
+                return null;
+
+            if (previous.SupplierId.HasValue || !previous.FromCustomerId.HasValue)
+                return new RootDealerInfo(previous.ToCustomer.Id, previous.ToCustomer.Name, previous.ToCustomer.Province ?? previous.Province ?? "");
+
+            current = previous.FromCustomerId.Value;
+        }
+
+        return null;
+    }
+
+    private static int SeverityRank(string severity) => severity switch
+    {
+        "高" => 3,
+        "中" => 2,
+        "低" => 1,
+        _ => 0
+    };
 
     /// <summary>Determine the distribution level based on chain position</summary>
     private static int GetDistributionLevel(Guid? fromCustomerId, List<DistributionRecord> allRecords)

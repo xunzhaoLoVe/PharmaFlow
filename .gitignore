@@ -5,6 +5,7 @@ obj/
 *.suo
 .vs/
 *.db
+*.db.bak-*
 *.db-shm
 *.db-wal
 

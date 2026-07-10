@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useRef, useState, useCallback } from 'react';
 import { Table, Button, Space, Input, Modal, Form, Select, message, Upload, DatePicker, Tag } from 'antd';
 import { PlusOutlined, UploadOutlined, DeleteOutlined, SearchOutlined, FileSearchOutlined } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
@@ -31,6 +31,8 @@ export default function SalesListPage() {
   const [importStatusOpen, setImportStatusOpen] = useState(false);
   const [importDetailOpen, setImportDetailOpen] = useState(false);
   const [importDetails, setImportDetails] = useState<DistributionImportDetailDto[]>([]);
+  const [importDetailCache, setImportDetailCache] = useState<Record<string, DistributionImportDetailDto[]>>({});
+  const importDetailCacheRef = useRef<Record<string, DistributionImportDetailDto[]>>({});
   const [detailLoading, setDetailLoading] = useState(false);
   const [detailStatus, setDetailStatus] = useState<string>();
   const [detailBatchName, setDetailBatchName] = useState('');
@@ -46,7 +48,7 @@ export default function SalesListPage() {
     } finally { setLoading(false); }
   }, []);
 
-  useEffect(() => { load(); loadMeta().catch(() => {}); loadImportBatches().catch(() => {}); }, []);
+  useEffect(() => { clearLegacyImportCache(); load(); loadMeta().catch(() => {}); loadImportBatches().catch(() => {}); }, []);
 
   const loadMeta = async () => {
     const d = await getDrugDropdown();
@@ -57,8 +59,137 @@ export default function SalesListPage() {
 
   const loadImportBatches = async () => {
     const res = await apiClient.get<ApiResponse<ImportBatchDto[]>>('/distribution/import-batches', { params: { isPurchase: false } });
-    setImportBatches(res.data || []);
+    const batches = res.data || [];
+    setImportBatches(batches);
+    return batches;
   };
+
+  const savedImportStatsKey = 'pharmaflow:sales-import-stats';
+  const savedImportDetailsKey = 'pharmaflow:sales-import-details';
+  const deletedImportBatchesKey = 'pharmaflow:sales-import-deleted';
+
+  const clearLegacyImportCache = () => {
+    localStorage.removeItem(savedImportStatsKey);
+    localStorage.removeItem(savedImportDetailsKey);
+    localStorage.removeItem(deletedImportBatchesKey);
+  };
+
+  const readSavedImportStats = (): Record<string, ImportBatchDto> => {
+    try {
+      return JSON.parse(localStorage.getItem(savedImportStatsKey) || '{}');
+    } catch {
+      return {};
+    }
+  };
+
+  const readDeletedImportBatchIds = (): string[] => {
+    try {
+      return JSON.parse(localStorage.getItem(deletedImportBatchesKey) || '[]');
+    } catch {
+      return [];
+    }
+  };
+
+  const mergeSavedImportStats = (batches: ImportBatchDto[]) => {
+    const saved = readSavedImportStats();
+    const deletedIds = new Set(readDeletedImportBatchIds());
+    const merged = batches
+      .filter(batch => !deletedIds.has(batch.id))
+      .map(batch => saved[batch.id] ? { ...batch, ...saved[batch.id] } : batch);
+    const knownIds = new Set(merged.map(batch => batch.id));
+    return [
+      ...Object.values(saved).filter(batch => !knownIds.has(batch.id) && !deletedIds.has(batch.id)),
+      ...merged,
+    ].sort((a, b) => dayjs(b.createdAt).valueOf() - dayjs(a.createdAt).valueOf());
+  };
+
+  const saveCurrentImportStats = (batch: ImportBatchDto) => {
+    void batch;
+  };
+
+  const readSavedImportDetails = (): Record<string, DistributionImportDetailDto[]> => {
+    try {
+      return JSON.parse(localStorage.getItem(savedImportDetailsKey) || '{}');
+    } catch {
+      return {};
+    }
+  };
+
+  const saveCurrentImportDetails = (batchId: string, details: DistributionImportDetailDto[]) => {
+    importDetailCacheRef.current = { ...importDetailCacheRef.current, [batchId]: details };
+    setImportDetailCache(prev => ({ ...prev, [batchId]: details }));
+  };
+
+  const getSavedImportDetails = (batchId: string, status: string) =>
+    (importDetailCacheRef.current[batchId] || importDetailCache[batchId] || [])
+      .filter(detail => detail.status === status);
+
+  const removeSavedImportBatch = (batchId: string) => {
+    delete importDetailCacheRef.current[batchId];
+    setImportDetailCache(prev => {
+      const next = { ...prev };
+      delete next[batchId];
+      return next;
+    });
+    setImportBatches(prev => prev.filter(batch => batch.id !== batchId));
+  };
+
+  const applyCurrentImportStats = (id: string, name: string, imported: number, duplicateSkipped: number, invalidSkipped: number) => {
+    const patched: ImportBatchDto = {
+      id,
+      name,
+      count: imported + duplicateSkipped + invalidSkipped,
+      successCount: imported,
+      duplicateCount: duplicateSkipped,
+      invalidCount: invalidSkipped,
+      createdAt: new Date().toISOString(),
+    };
+    saveCurrentImportStats(patched);
+    setImportBatches(prev => {
+      const exists = prev.some(batch => batch.id === id);
+      const next = prev.map(batch => batch.id === id ? { ...batch, ...patched } : batch);
+      return (exists ? next : [patched, ...next]).sort((a, b) => dayjs(b.createdAt).valueOf() - dayjs(a.createdAt).valueOf());
+    });
+  };
+
+  const getBatchSuccessCount = (batch: ImportBatchDto) => {
+    const duplicate = batch.duplicateCount || 0;
+    const invalid = batch.invalidCount || 0;
+    const explicit = batch.successCount || 0;
+    const inferred = Math.max(0, (batch.count || 0) - duplicate - invalid);
+    return explicit > 0 ? explicit : inferred;
+  };
+
+  const getBatchTotalCount = (batch: ImportBatchDto) =>
+    Math.max(batch.count || 0, getBatchSuccessCount(batch) + (batch.duplicateCount || 0) + (batch.invalidCount || 0));
+
+  const getBatchStatusCount = (batch: ImportBatchDto, status: string) => {
+    if (status === '成功') return getBatchSuccessCount(batch);
+    if (status === '重复') return batch.duplicateCount || 0;
+    if (status === '无效') return batch.invalidCount || 0;
+    return 0;
+  };
+
+  const buildSuccessDetailsFromRecords = (batch: ImportBatchDto): DistributionImportDetailDto[] =>
+    data
+      .filter(record => record.importBatchId === batch.id)
+      .map((record, index) => ({
+        id: record.id,
+        importBatchId: batch.id,
+        importBatchName: batch.name,
+        isPurchase: false,
+        rowNumber: index + 1,
+        status: '成功',
+        reason: '已导入',
+        drugName: record.drugName,
+        specification: record.specification,
+        batchNo: record.batchNo,
+        fromCustomerName: record.fromCustomerName,
+        toCustomerName: record.toCustomerName,
+        quantity: record.quantity,
+        distributionDate: record.distributionDateDisplay || (record.distributionDate ? record.distributionDate.substring(0, 10) : ''),
+        province: record.province,
+      }));
 
   const [searchFrom2, setSearchFrom2] = useState('');
   const [searchTo2, setSearchTo2] = useState('');
@@ -97,7 +228,17 @@ export default function SalesListPage() {
     setDetailLoading(true);
     try {
       const res = await apiClient.get<ApiResponse<DistributionImportDetailDto[]>>(`/distribution/import-batches/${batch.id}/details`);
-      setImportDetails((res.data || []).filter(d => d.status === status));
+      let details = (res.data || []).filter(d => d.status === status);
+      if (details.length === 0) {
+        details = getSavedImportDetails(batch.id, status);
+      }
+      if (details.length === 0 && status === '成功') {
+        details = buildSuccessDetailsFromRecords(batch);
+      }
+      if (details.length === 0 && getBatchStatusCount(batch, status) > 0) {
+        message.warning('这个历史批次当时没有保存逐行明细，只能看到统计数量；重新导入后可查看完整明细。');
+      }
+      setImportDetails(details);
     } finally {
       setDetailLoading(false);
     }
@@ -105,6 +246,7 @@ export default function SalesListPage() {
   const handleClearBatch = async (batch: ImportBatchDto) => {
     if (!window.confirm(`确定删除「${batch.name}」这批数据？删除后会同步还原相关库存。`)) return;
     await apiClient.delete(`/distribution/import-batches/${batch.id}`);
+    removeSavedImportBatch(batch.id);
     message.success('已删除该批数据');
     load(); loadImportBatches();
   };
@@ -201,15 +343,18 @@ export default function SalesListPage() {
         }
         const BATCH = 500;
         let imported = 0, duplicateSkipped = 0, supplemented = 0;
+        const returnedDetails: DistributionImportDetailDto[] = [];
         for (let i = 0; i < dtos.length; i += BATCH) {
           const res = await apiClient.post('/distribution/downstream/batch', dtos.slice(i, i + BATCH));
           const result = (res as any).data || { imported: 0, skipped: 0, supplemented: 0 };
           imported += result.imported || 0;
           duplicateSkipped += result.skipped || 0;
           supplemented += result.supplemented || 0;
+          returnedDetails.push(...(result.details || []));
         }
         message.success(`导入完成: 新增 ${imported} 条，跳过重复 ${duplicateSkipped} 条` + (skipped > 0 ? `，跳过无效 ${skipped} 条` : '') + (supplemented > 0 ? `，补充 ${supplemented} 条` : '')); load();
-        await loadImportBatches();
+        applyCurrentImportStats(importBatchId, importBatchName, imported, duplicateSkipped, skipped);
+        saveCurrentImportDetails(importBatchId, [...invalidDetails, ...returnedDetails]);
         setImportStatusOpen(true);
       } catch (err: any) {
         message.error('导入失败: ' + (err?.message || '未知错误'));
@@ -311,10 +456,10 @@ export default function SalesListPage() {
           pagination={{ pageSize: 8, showTotal: () => `共 ${importBatches.length} 次导入` }}
           columns={[
             { title: '导入文件/时间', dataIndex: 'name', ellipsis: true },
-            { title: '总数', dataIndex: 'count', width: 80 },
+            { title: '总数', dataIndex: 'count', width: 80, render: (_, batch) => getBatchTotalCount(batch) },
             {
               title: '成功', width: 90,
-              render: (_, batch) => <Button type="link" disabled={(batch.successCount || 0) === 0} onClick={() => openImportDetails(batch, '成功')}>{batch.successCount || 0}</Button>,
+              render: (_, batch) => <Button type="link" disabled={getBatchSuccessCount(batch) === 0} onClick={() => openImportDetails(batch, '成功')}>{getBatchSuccessCount(batch)}</Button>,
             },
             {
               title: '重复', width: 90,

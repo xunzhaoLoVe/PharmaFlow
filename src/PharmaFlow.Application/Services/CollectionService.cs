@@ -1543,7 +1543,7 @@ public class CollectionService : ICollectionService
             return CustomerType.基层医疗机构;
         if (ContainsAny(text, "医院", "医疗中心", "医学院附属"))
             return CustomerType.医院;
-        if (ContainsAny(text, "药店", "药房", "大药房", "连锁药"))
+        if (ContainsAny(text, "药店", "药房", "大药房", "医药连锁", "零售连锁", "连锁药"))
             return CustomerType.药店;
         if (ContainsAny(text, "诊所", "门诊"))
             return CustomerType.诊所;
@@ -1559,11 +1559,11 @@ public class CollectionService : ICollectionService
     private static bool ContainsAny(string text, params string[] values)
         => values.Any(v => text.Contains(v, StringComparison.OrdinalIgnoreCase));
 
-    private static DistributorRole? ResolveDistributorRole(JsonElement root, CustomerType customerType)
+    private static DistributorRole? ResolveDistributorRole(JsonElement root, CustomerType customerType, string? customerName = null)
     {
         if (customerType != CustomerType.商业) return null;
         var value = FirstNonEmpty(GetString(root, "DistributorRole"), GetString(root, "CustomerRole"), GetString(root, "Role"), GetString(root, "机构角色"));
-        return value switch
+        DistributorRole? explicitRole = value switch
         {
             "商业公司" => DistributorRole.商业公司,
             "配送公司" => DistributorRole.配送公司,
@@ -1571,6 +1571,18 @@ public class CollectionService : ICollectionService
             "其他" => DistributorRole.其他,
             _ => Enum.TryParse<DistributorRole>(value, out var parsed) ? parsed : null,
         };
+        return explicitRole ?? InferDistributorRoleByName(customerName);
+    }
+
+    private static DistributorRole? InferDistributorRoleByName(string? name)
+    {
+        var text = NormalizeLookupText(name);
+        if (string.IsNullOrWhiteSpace(text)) return null;
+        if (ContainsAny(text, "配送", "药物流", "物流")) return DistributorRole.配送公司;
+        if (ContainsAny(text, "代理")) return DistributorRole.代理商;
+        if (ContainsAny(text, "医药公司", "药业公司", "商业公司", "批发", "经销", "供应链", "流通"))
+            return DistributorRole.商业公司;
+        return null;
     }
 
     private static DistributorLevel? ResolveDistributorLevel(JsonElement root, CustomerType customerType)
@@ -1600,7 +1612,7 @@ public class CollectionService : ICollectionService
         var code = preferredCode?.Trim() ?? "";
         var province = GetProvince(root);
         var drugName = GetString(root, "DrugName");
-        var distributorRole = ResolveDistributorRole(root, createType);
+        var distributorRole = ResolveDistributorRole(root, createType, name);
         var distributorLevel = ResolveDistributorLevel(root, createType);
         var customer = FindCustomerByBusinessKey(customers, name, drugName, province, createType, distributorRole, distributorLevel);
 

@@ -210,6 +210,7 @@ export interface DistributionImportResultDto {
   imported: number;
   skipped: number;
   supplemented: number;
+  details?: DistributionImportDetailDto[];
 }
 
 export interface ImportBatchDto {
@@ -239,6 +240,23 @@ export interface DistributionImportDetailDto {
   distributionDate?: string;
   province?: string;
   createdAt?: string;
+}
+
+export interface ChannelConflictDto {
+  warningType: string;
+  severity: '高' | '中' | '低' | string;
+  drugName: string;
+  batchNo: string;
+  distributor: string;
+  expectedRegion: string;
+  actualCustomer: string;
+  actualRegion: string;
+  quantity: number;
+  baselineQuantity?: number;
+  ratio?: number;
+  date: string;
+  reason: string;
+  suggestion: string;
 }
 
 export interface DownstreamRecordDto {
