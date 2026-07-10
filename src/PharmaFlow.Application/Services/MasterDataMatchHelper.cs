@@ -45,7 +45,8 @@ internal static class MasterDataMatchHelper
         Guid? toCustomerId,
         decimal quantity,
         string? deliveryOrderNo,
-        DateTime distributionDate)
+        DateTime distributionDate,
+        string? province = null)
         => JoinKey(
             drugId.ToString(),
             NormalizeText(batchNo),
@@ -54,7 +55,8 @@ internal static class MasterDataMatchHelper
             toCustomerId?.ToString() ?? string.Empty,
             quantity.ToString("0.####"),
             NormalizeText(deliveryOrderNo),
-            distributionDate.Date.ToString("yyyy-MM-dd"));
+            distributionDate.Date.ToString("yyyy-MM-dd"),
+            NormalizeText(province));
 
     private static string JoinKey(params string[] parts)
         => string.Join("|", parts);

@@ -119,7 +119,7 @@ public class DistributionService : IDistributionService
             Guid? fromCustomerId = hasSupplier ? null : (dto.FromCustomerId == Guid.Empty ? self.Id : dto.FromCustomerId);
             Guid? toId = dto.ToCustomerId == Guid.Empty ? self.Id : dto.ToCustomerId;
             var distributionDate = ParseDistributionDate(dto);
-            var key = BuildDistributionKey(dto.DrugId, dto.BatchNo, hasSupplier ? dto.SupplierId : null, fromCustomerId, toId, dto.Quantity, dto.DeliveryOrderNo, distributionDate);
+            var key = BuildDistributionKey(dto.DrugId, dto.BatchNo, hasSupplier ? dto.SupplierId : null, fromCustomerId, toId, dto.Quantity, dto.DeliveryOrderNo, distributionDate, dto.Province);
 
             if (!seenKeys.Add(key))
             {
@@ -463,7 +463,7 @@ public class DistributionService : IDistributionService
         Guid? fromId = hasSupplier ? null : (dto.FromCustomerId == Guid.Empty ? selfId : dto.FromCustomerId);
         Guid? toId = dto.ToCustomerId == Guid.Empty ? selfId : dto.ToCustomerId;
         var distributionDate = ParseDistributionDate(dto);
-        var key = BuildDistributionKey(dto.DrugId, dto.BatchNo, hasSupplier ? dto.SupplierId : null, fromId, toId, dto.Quantity, dto.DeliveryOrderNo, distributionDate);
+        var key = BuildDistributionKey(dto.DrugId, dto.BatchNo, hasSupplier ? dto.SupplierId : null, fromId, toId, dto.Quantity, dto.DeliveryOrderNo, distributionDate, dto.Province);
 
         var existingRecords = await _db.DistributionRecords
             .Where(r => r.DrugId == dto.DrugId && r.BatchNo == dto.BatchNo)
@@ -513,7 +513,7 @@ public class DistributionService : IDistributionService
             : DateTime.Now;
 
     private static string BuildDistributionKey(DistributionRecord r)
-        => BuildDistributionKey(r.DrugId, r.BatchNo, r.SupplierId, r.FromCustomerId, r.ToCustomerId, r.Quantity, r.DeliveryOrderNo, r.DistributionDate);
+        => BuildDistributionKey(r.DrugId, r.BatchNo, r.SupplierId, r.FromCustomerId, r.ToCustomerId, r.Quantity, r.DeliveryOrderNo, r.DistributionDate, r.Province);
 
     private static string BuildDistributionKey(
         Guid drugId,
@@ -523,7 +523,8 @@ public class DistributionService : IDistributionService
         Guid? toCustomerId,
         decimal quantity,
         string? deliveryOrderNo,
-        DateTime distributionDate)
+        DateTime distributionDate,
+        string? province)
         => MasterDataMatchHelper.DistributionRecordKey(
             drugId,
             batchNo,
@@ -532,7 +533,8 @@ public class DistributionService : IDistributionService
             toCustomerId,
             quantity,
             deliveryOrderNo,
-            distributionDate);
+            distributionDate,
+            province);
 
     private static bool SupplementDistributionRecord(DistributionRecord target, DownstreamRecordDto source, DateTime distributionDate)
     {
