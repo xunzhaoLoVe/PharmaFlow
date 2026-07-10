@@ -105,7 +105,6 @@ export default function PurchaseListPage() {
       if (!drugCol) { message.error('未找到"药品名称"列'); return; }
       if (!custCol) { message.error('未找到"采购经销商"列'); return; }
 
-      const [allDrugs, allCusts] = await Promise.all([getDrugDropdown(), getCustomerDropdown('一级经销商')]);
       const dtos = []; let skipped = 0;
       for (const row of rows) {
         const drugName = (row[drugCol] || '').trim();
@@ -113,20 +112,11 @@ export default function PurchaseListPage() {
         const custName = (row[custCol] || '').trim();
         if (!drugName || !custName) { skipped++; continue; }
 
-        // 精确匹配：名称+规格，如无规格则仅匹配名称
-        let drug = spec ? allDrugs.find(d => {
-          const name = d.name.split(' [')[0];
-          const dSpec = d.name.split(' [')[1]?.replace(']', '') || '';
-          return name === drugName && dSpec === spec;
-        }) : null;
-        if (!drug) drug = allDrugs.find(d => d.name.split(' [')[0] === drugName);
-        const cust = allCusts.find(c => c.name.includes(custName));
-        if (!drug || !cust) { skipped++; continue; }
-
         dtos.push({
-          drugId: drug.id, drugName: drug.name.split(' [')[0],
+          drugName,
+          specification: spec,
           batchNo: batchCol ? (row[batchCol] || '').trim() : '',
-          toCustomerId: cust.id, toCustomerName: cust.name,
+          toCustomerName: custName,
           quantity: qtyCol ? (parseFloat(row[qtyCol]) || 1) : 1,
           taxedUnitPrice: priceCol ? (parseFloat(row[priceCol]) || 0) : 0,
           salesPerson: salesCol ? (row[salesCol] || '').trim() : '',

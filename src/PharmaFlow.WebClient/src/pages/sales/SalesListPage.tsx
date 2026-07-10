@@ -106,11 +106,6 @@ export default function SalesListPage() {
         const qtyCol = findCol(['数量', '流转数量']); const dateCol = findCol(['日期', '流转日期']); const provCol = findCol(['省份', '省']);
         if (!drugCol || !fromCol || !toCol) { message.error('缺少必要列：药品、来源、去向'); return; }
 
-        const [allDrugs, allFrom, allTo] = await Promise.all([
-          getDrugDropdown(), getDistributorDropdown(),
-          apiClient.get<ApiResponse<DropdownItem[]>>('/customers/end-dropdown').then(r => r.data!),
-        ]);
-        const allCustomers = [...allFrom, ...allTo];
         const v = (r: any, c: string | null) => c ? String(r[c] || '').trim() : '';
         const dtos = []; let skipped = 0;
 
@@ -118,15 +113,12 @@ export default function SalesListPage() {
           const drugVal = v(row, drugCol); const specVal = v(row, specCol);
           const fromVal = v(row, fromCol); const toVal = v(row, toCol);
           if (!drugVal || !fromVal || !toVal) { skipped++; continue; }
-          const drug = allDrugs.find((d: any) => (d.name || '').includes(drugVal) && (!specVal || (d.name || '').includes(specVal)));
-          const fromC = allFrom.find((c: any) => c.name.includes(fromVal));
-          const toC = allCustomers.find((c: any) => c.name.includes(toVal));
-          if (!drug || !fromC || !toC) { skipped++; continue; }
           dtos.push({
-            drugId: drug.id, drugName: (drug.name || '').split(' [')[0],
+            drugName: drugVal,
+            specification: specVal,
             batchNo: v(row, batchCol) || '',
-            fromCustomerId: fromC.id, fromCustomerName: fromC.name,
-            toCustomerId: toC.id, toCustomerName: toC.name,
+            fromCustomerName: fromVal,
+            toCustomerName: toVal,
             quantity: parseFloat(v(row, qtyCol)) || 1,
             distributionDate: v(row, dateCol).replace(/^(\d{4}-\d{2})$/, '$1-01'),
             distributionDateDisplay: v(row, dateCol),

@@ -73,6 +73,7 @@ public class DistributionService : IDistributionService
     {
         var self = await _db.Customers.FirstOrDefaultAsync(c => c.Code == "SELF");
         if (self == null) throw new InvalidOperationException("系统错误：本公司(SELF)记录不存在");
+        await PrepareMasterDataAsync(new List<DownstreamRecordDto> { dto }, self.Id);
         var result = await RecordOneAsync(dto, operatorName, self.Id);
         await _db.SaveChangesAsync();
         return result;
@@ -86,6 +87,8 @@ public class DistributionService : IDistributionService
 
         var self = await _db.Customers.FirstOrDefaultAsync(c => c.Code == "SELF");
         if (self == null) throw new InvalidOperationException("系统错误：本公司(SELF)记录不存在");
+
+        await PrepareMasterDataAsync(dtos, self.Id);
 
         var drugIds = dtos.Select(d => d.DrugId).Distinct().ToList();
         var batchNos = dtos.Select(d => d.BatchNo).Distinct().ToList();
@@ -167,6 +170,288 @@ public class DistributionService : IDistributionService
         await _db.SaveChangesAsync();
         return result;
     }
+
+    private async Task PrepareMasterDataAsync(List<DownstreamRecordDto> dtos, Guid selfId)
+    {
+        var drugs = await _db.Drugs.Where(d => !d.IsDeleted).ToListAsync();
+        var customers = await _db.Customers.Where(c => !c.IsDeleted && c.Code != "SELF").ToListAsync();
+
+        var inferredLevels = InferDistributorLevels(dtos, customers);
+
+        foreach (var dto in dtos)
+        {
+            if (dto.DrugId == Guid.Empty && !string.IsNullOrWhiteSpace(dto.DrugName))
+                dto.DrugId = ResolveDrug(dto, drugs).Id;
+
+            if (dto.DrugId == Guid.Empty)
+                continue;
+
+            var drugName = ResolveDrugName(dto, drugs);
+            var isPurchaseFlow = IsPurchaseFlow(dto);
+
+            if (isPurchaseFlow)
+            {
+                if (dto.ToCustomerId == Guid.Empty && !string.IsNullOrWhiteSpace(dto.ToCustomerName))
+                {
+                    dto.ToCustomerId = ResolveCustomer(
+                        dto.ToCustomerName,
+                        drugName,
+                        dto.Province,
+                        CustomerType.商业,
+                        DistributorLevel.一级经销商,
+                        InferDistributorRole(dto.ToCustomerName),
+                        customers).Id;
+                }
+                continue;
+            }
+
+            if (dto.FromCustomerId == Guid.Empty && !string.IsNullOrWhiteSpace(dto.FromCustomerName))
+            {
+                var fromLevel = LookupInferredLevel(inferredLevels, dto.FromCustomerName);
+                dto.FromCustomerId = ResolveCustomer(
+                    dto.FromCustomerName,
+                    drugName,
+                    null,
+                    CustomerType.商业,
+                    fromLevel,
+                    InferDistributorRole(dto.FromCustomerName),
+                    customers).Id;
+            }
+
+            if (dto.ToCustomerId == Guid.Empty && !string.IsNullOrWhiteSpace(dto.ToCustomerName))
+            {
+                var toType = InferCustomerType(dto.ToCustomerName);
+                var toLevel = toType == CustomerType.商业 ? LookupInferredLevel(inferredLevels, dto.ToCustomerName) : null;
+                dto.ToCustomerId = ResolveCustomer(
+                    dto.ToCustomerName,
+                    drugName,
+                    dto.Province,
+                    toType,
+                    toLevel,
+                    toType == CustomerType.商业 ? InferDistributorRole(dto.ToCustomerName) : null,
+                    customers).Id;
+            }
+        }
+    }
+
+    private Drug ResolveDrug(DownstreamRecordDto dto, List<Drug> drugs)
+    {
+        var name = dto.DrugName.Trim();
+        var specification = NormalizeOptional(dto.Specification);
+        var drug = drugs.FirstOrDefault(d =>
+            SameText(d.Name, name)
+            && (string.IsNullOrWhiteSpace(specification) || SameText(d.Specification, specification)));
+
+        drug ??= drugs.FirstOrDefault(d =>
+            SameText(d.Name, name)
+            && (string.IsNullOrWhiteSpace(specification) || ContainsNormalized(d.Specification, specification) || ContainsNormalized(specification, d.Specification)));
+
+        if (drug != null)
+            return drug;
+
+        drug = new Drug
+        {
+            Code = $"AUTO-DRUG-{Guid.NewGuid():N}"[..18],
+            Name = name,
+            Specification = specification,
+            Unit = "盒",
+        };
+        _db.Drugs.Add(drug);
+        drugs.Add(drug);
+        return drug;
+    }
+
+    private static string ResolveDrugName(DownstreamRecordDto dto, List<Drug> drugs)
+    {
+        var drug = drugs.FirstOrDefault(d => d.Id == dto.DrugId);
+        return drug?.Name ?? dto.DrugName;
+    }
+
+    private Customer ResolveCustomer(
+        string name,
+        string drugName,
+        string? province,
+        CustomerType customerType,
+        DistributorLevel? level,
+        DistributorRole? role,
+        List<Customer> customers)
+    {
+        name = name.Trim();
+        var normalizedName = NormalizeKey(name);
+        var customer = customers
+            .Where(c => NormalizeKey(c.Name) == normalizedName)
+            .OrderByDescending(c => CustomerMatchesDrug(c, drugName))
+            .ThenBy(c => c.CustomerType == customerType ? 0 : 1)
+            .FirstOrDefault();
+
+        if (customer == null)
+        {
+            customer = new Customer
+            {
+                Code = $"AUTO-CUST-{Guid.NewGuid():N}"[..18],
+                Name = name,
+                Province = NormalizeOptional(province),
+                DrugName = NormalizeOptional(drugName),
+                CustomerType = customerType,
+                Level = customerType == CustomerType.商业 ? level : null,
+                DistributorRole = customerType == CustomerType.商业 ? role : null,
+            };
+            _db.Customers.Add(customer);
+            customers.Add(customer);
+            return customer;
+        }
+
+        var changed = false;
+        if (!CustomerMatchesDrug(customer, drugName) && !string.IsNullOrWhiteSpace(drugName))
+        {
+            customer.DrugName = string.IsNullOrWhiteSpace(customer.DrugName)
+                ? drugName
+                : customer.DrugName + "\n" + drugName;
+            changed = true;
+        }
+        if (string.IsNullOrWhiteSpace(customer.Province) && !string.IsNullOrWhiteSpace(province))
+        {
+            customer.Province = province.Trim();
+            changed = true;
+        }
+        if (customer.CustomerType != customerType && customerType == CustomerType.商业)
+        {
+            customer.CustomerType = CustomerType.商业;
+            changed = true;
+        }
+        if (customer.CustomerType == CustomerType.商业)
+        {
+            if (!customer.Level.HasValue && level.HasValue) { customer.Level = level; changed = true; }
+            if (!customer.DistributorRole.HasValue && role.HasValue) { customer.DistributorRole = role; changed = true; }
+        }
+        if (changed) customer.UpdatedAt = DateTime.UtcNow;
+        return customer;
+    }
+
+    private Dictionary<string, DistributorLevel> InferDistributorLevels(List<DownstreamRecordDto> dtos, List<Customer> customers)
+    {
+        var levels = customers
+            .Where(c => c.CustomerType == CustomerType.商业 && c.Level.HasValue)
+            .GroupBy(c => NormalizeKey(c.Name), StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(g => g.Key, g => g.Min(c => c.Level!.Value), StringComparer.OrdinalIgnoreCase);
+
+        var dealerNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var incoming = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var edges = new List<(string From, string To)>();
+
+        foreach (var dto in dtos)
+        {
+            if (IsPurchaseFlow(dto))
+            {
+                if (!string.IsNullOrWhiteSpace(dto.ToCustomerName))
+                {
+                    var to = NormalizeKey(dto.ToCustomerName);
+                    levels[to] = DistributorLevel.一级经销商;
+                    dealerNames.Add(to);
+                }
+                continue;
+            }
+
+            if (string.IsNullOrWhiteSpace(dto.FromCustomerName))
+                continue;
+
+            var from = NormalizeKey(dto.FromCustomerName);
+            dealerNames.Add(from);
+
+            if (!string.IsNullOrWhiteSpace(dto.ToCustomerName) && InferCustomerType(dto.ToCustomerName) == CustomerType.商业)
+            {
+                var to = NormalizeKey(dto.ToCustomerName);
+                dealerNames.Add(to);
+                incoming.Add(to);
+                edges.Add((from, to));
+            }
+        }
+
+        foreach (var root in dealerNames.Where(n => !incoming.Contains(n)))
+            levels.TryAdd(root, DistributorLevel.一级经销商);
+
+        var changed = true;
+        while (changed)
+        {
+            changed = false;
+            foreach (var (from, to) in edges)
+            {
+                if (!levels.TryGetValue(from, out var fromLevel))
+                    continue;
+
+                var nextLevel = (DistributorLevel)Math.Min(3, (int)fromLevel + 1);
+                if (!levels.TryGetValue(to, out var current) || nextLevel < current)
+                {
+                    levels[to] = nextLevel;
+                    changed = true;
+                }
+            }
+        }
+
+        foreach (var name in dealerNames)
+            levels.TryAdd(name, DistributorLevel.一级经销商);
+
+        return levels;
+    }
+
+    private static DistributorLevel? LookupInferredLevel(Dictionary<string, DistributorLevel> levels, string name)
+        => levels.TryGetValue(NormalizeKey(name), out var level) ? level : null;
+
+    private static bool IsPurchaseFlow(DownstreamRecordDto dto)
+        => (dto.SupplierId.HasValue && dto.SupplierId != Guid.Empty)
+            || (dto.FromCustomerId == Guid.Empty && string.IsNullOrWhiteSpace(dto.FromCustomerName));
+
+    private static CustomerType InferCustomerType(string? name)
+    {
+        var text = name ?? string.Empty;
+        if (ContainsAny(text, "卫生院", "卫生室", "卫生服务中心", "社区卫生", "卫生服务站"))
+            return CustomerType.基层医疗机构;
+        if (ContainsAny(text, "医院", "卫生院"))
+            return CustomerType.医院;
+        if (ContainsAny(text, "药店", "药房", "大药房", "医药连锁"))
+            return CustomerType.药店;
+        if (ContainsAny(text, "诊所", "门诊"))
+            return CustomerType.诊所;
+        return CustomerType.商业;
+    }
+
+    private static DistributorRole? InferDistributorRole(string? name)
+    {
+        var text = name ?? string.Empty;
+        if (ContainsAny(text, "配送")) return DistributorRole.配送公司;
+        if (ContainsAny(text, "代理")) return DistributorRole.代理商;
+        return DistributorRole.商业公司;
+    }
+
+    private static bool ContainsAny(string text, params string[] keywords)
+        => keywords.Any(k => text.Contains(k, StringComparison.OrdinalIgnoreCase));
+
+    private static bool CustomerMatchesDrug(Customer customer, string drugName)
+        => string.IsNullOrWhiteSpace(drugName)
+            || string.IsNullOrWhiteSpace(customer.DrugName)
+            || customer.DrugName.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .Any(d => SameText(d, drugName));
+
+    private static string? NormalizeOptional(string? value)
+        => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+
+    private static bool SameText(string? left, string? right)
+        => string.Equals(NormalizeKey(left), NormalizeKey(right), StringComparison.OrdinalIgnoreCase);
+
+    private static bool ContainsNormalized(string? source, string? value)
+    {
+        var normalizedSource = NormalizeKey(source);
+        var normalizedValue = NormalizeKey(value);
+        return normalizedSource.Length > 0 && normalizedValue.Length > 0 && normalizedSource.Contains(normalizedValue, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string NormalizeKey(string? value)
+        => (value ?? string.Empty)
+            .Trim()
+            .Replace('（', '(')
+            .Replace('）', ')')
+            .Replace(" ", string.Empty)
+            .Replace("\u3000", string.Empty);
 
     private async Task<DistributionImportResultDto> RecordOneAsync(DownstreamRecordDto dto, string operatorName, Guid selfId)
     {

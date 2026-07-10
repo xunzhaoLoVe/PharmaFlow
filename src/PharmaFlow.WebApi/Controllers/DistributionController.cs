@@ -69,7 +69,7 @@ public class DistributionController : ControllerBase
         [FromBody] DownstreamRecordDto dto)
     {
         // 采购出货（本司→经销商）：自动分配供应商
-        if (dto.FromCustomerId == Guid.Empty && dto.SupplierId == null)
+        if (dto.FromCustomerId == Guid.Empty && string.IsNullOrWhiteSpace(dto.FromCustomerName) && dto.SupplierId == null)
             dto.SupplierId = await GetDefaultSupplierIdAsync();
         var operatorName = User.FindFirst(System.Security.Claims.ClaimTypes.Name)?.Value ?? "系统";
         var result = await _distributionService.RecordDownstreamAsync(dto, operatorName);
@@ -83,7 +83,7 @@ public class DistributionController : ControllerBase
         var supplierId = await GetDefaultSupplierIdAsync();
         foreach (var dto in dtos)
         {
-            if (dto.FromCustomerId == Guid.Empty && dto.SupplierId == null)
+            if (dto.FromCustomerId == Guid.Empty && string.IsNullOrWhiteSpace(dto.FromCustomerName) && dto.SupplierId == null)
                 dto.SupplierId = supplierId;
         }
         var operatorName = User.FindFirst(System.Security.Claims.ClaimTypes.Name)?.Value ?? "系统";

@@ -211,10 +211,12 @@ export interface DistributionImportResultDto {
 }
 
 export interface DownstreamRecordDto {
-  drugId: string;
+  drugId?: string;
   drugName?: string;
+  specification?: string;
   batchNo: string;
   fromCustomerId?: string;
+  fromCustomerName?: string;
   toCustomerId?: string;
   toCustomerName?: string;
   quantity: number;

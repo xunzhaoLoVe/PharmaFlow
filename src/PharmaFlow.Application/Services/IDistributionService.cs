@@ -91,6 +91,7 @@ public record DownstreamRecordDto
 {
     public Guid DrugId { get; set; }
     public string DrugName { get; set; } = string.Empty;
+    public string? Specification { get; set; }
     public string BatchNo { get; set; } = string.Empty;
     /// <summary>供应商来源ID（与 FromCustomerId 互斥，供应商来源时设置此项）</summary>
     public Guid? SupplierId { get; set; }
