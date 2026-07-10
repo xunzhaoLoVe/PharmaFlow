@@ -28,7 +28,7 @@ export default function PurchaseListPage() {
   const [drugs, setDrugs] = useState<DropdownItem[]>([]);
   const [customers, setCustomers] = useState<DropdownItem[]>([]);
   const [importBatches, setImportBatches] = useState<ImportBatchDto[]>([]);
-  const [selectedBatchId, setSelectedBatchId] = useState<string>();
+  const [batchModalOpen, setBatchModalOpen] = useState(false);
   const [form] = Form.useForm();
 
   const load = useCallback(async () => {
@@ -58,20 +58,14 @@ export default function PurchaseListPage() {
   };
 
   const handleDelete = async (id: string) => { await deleteDistribution(id); message.success('已删除'); load(); };
-  const handleClearPurchases = async () => {
-    const label = 'Excel/手工采购数据';
-    if (!window.confirm(`确定清空${label}？清空后会同步还原相关库存。`)) return;
-    await apiClient.delete('/distribution/clear-purchases', { params: { origin: 'manual' } });
-    message.success(`已清空${label}`);
-    load(); loadImportBatches();
+  const openBatchModal = async () => {
+    await loadImportBatches();
+    setBatchModalOpen(true);
   };
-  const handleClearSelectedBatch = async () => {
-    if (!selectedBatchId) return;
-    const batch = importBatches.find(b => b.id === selectedBatchId);
-    if (!window.confirm(`确定清空导入批次「${batch?.name || selectedBatchId}」？清空后会同步还原相关库存。`)) return;
-    await apiClient.delete(`/distribution/import-batches/${selectedBatchId}`);
+  const handleClearBatch = async (batch: ImportBatchDto) => {
+    if (!window.confirm(`确定删除「${batch.name}」这次导入的数据？删除后会同步还原相关库存。`)) return;
+    await apiClient.delete(`/distribution/import-batches/${batch.id}`);
     message.success('已清空该导入批次');
-    setSelectedBatchId(undefined);
     load(); loadImportBatches();
   };
 
@@ -168,10 +162,9 @@ export default function PurchaseListPage() {
   const filtered = useMemo(() => {
     return data.filter(d => {
       if (sqCustomer && !(d.toCustomerName || '').includes(sqCustomer)) return false;
-      if (selectedBatchId && d.importBatchId !== selectedBatchId) return false;
       return isDateInRange(d.distributionDate, dateRange);
     });
-  }, [data, sqCustomer, selectedBatchId, dateRange]);
+  }, [data, sqCustomer, dateRange]);
 
   const columns: ColumnsType<DistributionRecordDto> = [
     { title: '药品名称', dataIndex: 'drugName', width: 140,
@@ -230,24 +223,29 @@ export default function PurchaseListPage() {
           onChange={(_, values) => setDateRange(values[0] && values[1] ? [values[0], values[1]] : null)}
           style={{ width: 250 }}
         />
-        <Select
-          allowClear
-          placeholder="导入批次"
-          value={selectedBatchId}
-          onChange={setSelectedBatchId}
-          style={{ width: 260 }}
-          options={importBatches.map(b => ({ label: `${b.name}（${b.count}条）`, value: b.id }))}
-        />
         <TableFilters rows={filtered} fields={filterFields} value={tableFilters} onChange={setTableFilters} />
         {canWrite && <Button type="primary" icon={<PlusOutlined />} onClick={handleAdd}>录入出货</Button>}
         {canWrite && <Upload accept=".xlsx" showUploadList={false} beforeUpload={handleExcelImport}>
           <Button icon={<UploadOutlined />}>导入Excel</Button>
         </Upload>}
-        {canWrite && <Button danger icon={<DeleteOutlined />} onClick={handleClearPurchases}>清空 Excel/手工数据</Button>}
-        {canWrite && selectedBatchId && <Button danger icon={<DeleteOutlined />} onClick={handleClearSelectedBatch}>清空该批次</Button>}
+        {canWrite && <Button danger icon={<DeleteOutlined />} onClick={openBatchModal}>删除导入数据</Button>}
       </Space>
       <Table rowKey="id" columns={columns} dataSource={tableData} loading={loading}
         pagination={{ defaultPageSize: 10, showTotal: () => `共 ${tableData.length} 条`, showSizeChanger: true }} />
+      <Modal title="选择要删除的采购导入" open={batchModalOpen} onCancel={() => setBatchModalOpen(false)} footer={null} width={760}>
+        <Table
+          rowKey="id"
+          size="small"
+          dataSource={importBatches}
+          pagination={{ pageSize: 8, showTotal: () => `共 ${importBatches.length} 次导入` }}
+          columns={[
+            { title: '导入文件/时间', dataIndex: 'name', ellipsis: true },
+            { title: '记录数', dataIndex: 'count', width: 90 },
+            { title: '导入时间', dataIndex: 'createdAt', width: 150, render: (v: string) => dayjs(v).format('YYYY-MM-DD HH:mm') },
+            { title: '操作', width: 90, render: (_, batch) => <Button danger size="small" icon={<DeleteOutlined />} onClick={() => handleClearBatch(batch)}>删除</Button> },
+          ]}
+        />
+      </Modal>
       <Modal title="录入出货（本司 → 一级经销商）" open={modalOpen} onOk={handleOk} onCancel={() => setModalOpen(false)} width={560}>
         <Form form={form} layout="vertical">
           <Form.Item name="drugId" label="药品名称 / 规格型号" rules={[{ required: true }]}>
