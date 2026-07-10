@@ -91,7 +91,7 @@ export default function SalesListPage() {
 
   // Excel 导入
   const handleExcelImport = async (file: File) => {
-    message.loading('正在解析 Excel...', 0);
+    const hideLoading = message.loading('正在解析 Excel...', 0);
     const reader = new FileReader();
     reader.onload = async (e) => {
       try {
@@ -145,9 +145,13 @@ export default function SalesListPage() {
           supplemented += result.supplemented || 0;
         }
         message.success(`导入完成: 新增 ${imported} 条，跳过重复 ${duplicateSkipped} 条` + (skipped > 0 ? `，跳过无效 ${skipped} 条` : '') + (supplemented > 0 ? `，补充 ${supplemented} 条` : '')); load();
-      } catch (err: any) { message.destroy(); message.error('导入失败: ' + (err?.message || '未知错误')); }
+      } catch (err: any) {
+        message.error('导入失败: ' + (err?.message || '未知错误'));
+      } finally {
+        hideLoading();
+      }
     };
-    reader.onerror = () => { message.destroy(); message.error('文件读取失败'); };
+    reader.onerror = () => { hideLoading(); message.error('文件读取失败'); };
     reader.readAsArrayBuffer(file);
     return false;
   };

@@ -81,13 +81,12 @@ export default function PurchaseListPage() {
 
   // Excel import
   const handleExcelImport = async (file: File) => {
-    message.loading('正在解析 Excel...', 0);
+    const hideLoading = message.loading('正在解析 Excel...', 0);
     const reader = new FileReader();
     reader.onload = async (e) => {
       try {
         const wb = XLSX.read(e.target?.result, { type: 'array' });
         const rows = XLSX.utils.sheet_to_json<Record<string, string>>(wb.Sheets[wb.SheetNames[0]], { defval: '' });
-        message.destroy();
         if (rows.length === 0) { message.warning('Excel 无数据'); return; }
 
       const headers = Object.keys(rows[0]);
@@ -141,12 +140,13 @@ export default function PurchaseListPage() {
         const result = (res as any).data || { imported: dtos.length, skipped: 0, supplemented: 0 };
         message.success(`导入完成: 新增 ${result.imported || 0} 条，跳过重复 ${result.skipped || 0} 条` + (skipped > 0 ? `，跳过无效 ${skipped} 条` : '')); load();
       } catch (ex: any) {
-        message.destroy();
         message.error('Excel 解析失败: ' + (ex?.message || '未知错误'));
+      } finally {
+        hideLoading();
       }
     };
     reader.onerror = () => {
-      message.destroy();
+      hideLoading();
       message.error('文件读取失败，请检查文件是否损坏');
     };
     reader.readAsArrayBuffer(file);

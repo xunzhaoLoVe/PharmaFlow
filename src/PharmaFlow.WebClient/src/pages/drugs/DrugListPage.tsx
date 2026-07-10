@@ -48,14 +48,13 @@ export default function DrugListPage() {
 
   // Excel 导入
   const handleExcelImport = (file: File) => {
-    message.loading('正在解析 Excel...', 0);
+    const hideLoading = message.loading('正在解析 Excel...', 0);
     const reader = new FileReader();
     reader.onload = async (e) => {
       try {
         const wb = XLSX.read(e.target?.result, { type: 'array' });
         const sheet = wb.Sheets[wb.SheetNames[0]];
         const rows = XLSX.utils.sheet_to_json<Record<string, string>>(sheet, { defval: '' });
-        message.destroy();
         if (rows.length === 0) { message.warning('Excel 无数据'); return; }
         const aliases: Record<string, string[]> = {
           code: ['编码', '药品编码', '代码', 'code'],
@@ -76,12 +75,13 @@ export default function DrugListPage() {
         }
         load();
       } catch (ex: any) {
-        message.destroy();
         message.error('Excel 解析失败: ' + (ex?.message || '未知错误'));
+      } finally {
+        hideLoading();
       }
     };
     reader.onerror = () => {
-      message.destroy();
+      hideLoading();
       message.error('文件读取失败，请检查文件是否损坏');
     };
     reader.readAsArrayBuffer(file);
