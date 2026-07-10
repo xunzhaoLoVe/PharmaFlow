@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback, useMemo } from 'react';
-import { Table, Button, Space, Input, Modal, Form, Select, message, Upload, DatePicker, Dropdown } from 'antd';
+import { Table, Button, Space, Input, Modal, Form, Select, message, Upload, DatePicker } from 'antd';
 import { PlusOutlined, UploadOutlined, DeleteOutlined, SearchOutlined } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
 import dayjs from 'dayjs';
@@ -51,10 +51,10 @@ export default function PurchaseListPage() {
   };
 
   const handleDelete = async (id: string) => { await deleteDistribution(id); message.success('已删除'); load(); };
-  const handleClearPurchases = async (origin: 'manual' | 'sync') => {
-    const label = origin === 'sync' ? '采集同步采购数据' : 'Excel/手工采购数据';
+  const handleClearPurchases = async () => {
+    const label = 'Excel/手工采购数据';
     if (!window.confirm(`确定清空${label}？清空后会同步还原相关库存。`)) return;
-    await apiClient.delete('/distribution/clear-purchases', { params: { origin } });
+    await apiClient.delete('/distribution/clear-purchases', { params: { origin: 'manual' } });
     message.success(`已清空${label}`);
     load();
   };
@@ -213,20 +213,7 @@ export default function PurchaseListPage() {
         {canWrite && <Upload accept=".xlsx" showUploadList={false} beforeUpload={handleExcelImport}>
           <Button icon={<UploadOutlined />}>导入Excel</Button>
         </Upload>}
-        {canWrite && (
-          <Dropdown
-            trigger={['click']}
-            menu={{
-              items: [
-                { key: 'manual', label: '清空 Excel/手工采购数据', danger: true },
-                { key: 'sync', label: '清空采集同步采购数据', danger: true },
-              ],
-              onClick: ({ key }) => handleClearPurchases(key as 'manual' | 'sync'),
-            }}
-          >
-            <Button danger icon={<DeleteOutlined />}>清空</Button>
-          </Dropdown>
-        )}
+        {canWrite && <Button danger icon={<DeleteOutlined />} onClick={handleClearPurchases}>清空 Excel/手工数据</Button>}
       </Space>
       <Table rowKey="id" columns={columns} dataSource={tableData} loading={loading}
         pagination={{ defaultPageSize: 10, showTotal: () => `共 ${tableData.length} 条`, showSizeChanger: true }} />

@@ -123,24 +123,22 @@ public class DistributionController : ControllerBase
     public async Task<ActionResult<ApiResponse>> ClearSalesByOrigin(
         [FromQuery] string origin)
     {
-        if (origin is not ("manual" or "sync"))
+        if (origin != "manual")
             return BadRequest(ApiResponse.Fail("清空类型无效"));
 
         var count = await _distributionService.ClearSalesByOriginAsync(origin);
-        var label = origin == "sync" ? "采集同步销售数据" : "Excel/手工销售数据";
-        return Ok(ApiResponse.Ok($"已清空{label} {count} 条"));
+        return Ok(ApiResponse.Ok($"已清空Excel/手工销售数据 {count} 条"));
     }
 
     [HttpDelete("clear-purchases")]
     public async Task<ActionResult<ApiResponse>> ClearPurchasesByOrigin(
         [FromQuery] string origin)
     {
-        if (origin is not ("manual" or "sync"))
+        if (origin != "manual")
             return BadRequest(ApiResponse.Fail("清空类型无效"));
 
         var count = await _distributionService.ClearPurchasesByOriginAsync(origin);
-        var label = origin == "sync" ? "采集同步采购数据" : "Excel/手工采购数据";
-        return Ok(ApiResponse.Ok($"已清空{label} {count} 条"));
+        return Ok(ApiResponse.Ok($"已清空Excel/手工采购数据 {count} 条"));
     }
 
     [HttpGet("conflicts")]
