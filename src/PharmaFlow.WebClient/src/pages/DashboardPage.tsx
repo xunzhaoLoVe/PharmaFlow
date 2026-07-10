@@ -42,6 +42,19 @@ const MAP_PROVINCE_TOTAL = 34;
 const MAP_VIEWBOX_WIDTH = 920;
 const MAP_VIEWBOX_HEIGHT = 640;
 const MAP_VIEWBOX_PADDING = 24;
+const MAP_CALLOUT_WIDTH = 92;
+const MAP_CALLOUT_HEIGHT = 34;
+
+const DENSE_PROVINCE_LABEL_SLOTS: Record<string, { x: number; y: number; anchor: 'start' | 'end' }> = {
+  北京市: { x: 710, y: 140, anchor: 'start' },
+  天津市: { x: 724, y: 178, anchor: 'start' },
+  山东省: { x: 716, y: 220, anchor: 'start' },
+  江苏省: { x: 735, y: 262, anchor: 'start' },
+  上海市: { x: 742, y: 304, anchor: 'start' },
+  浙江省: { x: 728, y: 346, anchor: 'start' },
+  香港特别行政区: { x: 650, y: 416, anchor: 'start' },
+  澳门特别行政区: { x: 650, y: 456, anchor: 'start' },
+};
 
 const PROV_MAP: Record<string, string> = {
   北京: '北京市',
@@ -120,6 +133,16 @@ interface ProjectedMapFeature {
   path: string;
   labelX: number;
   labelY: number;
+}
+
+interface MapProvinceLabel {
+  feature: ProjectedMapFeature;
+  value: number;
+  callout?: {
+    x: number;
+    y: number;
+    anchor: 'start' | 'end';
+  };
 }
 
 interface MapTooltipState {
@@ -355,10 +378,18 @@ function ChinaMapCard({ data, loading }: { data: CountItem[] | null; loading: bo
     [provinceMap],
   );
   const displayProvinces = rankedProvinces.slice(0, 10);
-  const labeledProvinceNames = useMemo(
-    () => new Set(rankedProvinces.slice(0, 6).map(item => item.name)),
-    [rankedProvinces],
+  const provinceLabels = useMemo<MapProvinceLabel[]>(
+    () => mapFeatures
+      .map(feature => ({
+        feature,
+        value: provinceMap.get(feature.name) ?? 0,
+        callout: DENSE_PROVINCE_LABEL_SLOTS[feature.name],
+      }))
+      .filter(label => label.value > 0),
+    [mapFeatures, provinceMap],
   );
+  const inlineProvinceLabels = provinceLabels.filter(label => !label.callout);
+  const calloutProvinceLabels = provinceLabels.filter(label => label.callout);
   const totalCustomers = useMemo(
     () => Array.from(provinceMap.values()).reduce((total, count) => total + count, 0),
     [provinceMap],
@@ -416,8 +447,8 @@ function ChinaMapCard({ data, loading }: { data: CountItem[] | null; loading: bo
       title={(
         <div className="dashboard-map-title">
           <span className="dashboard-title-copy">
-            <span className="dashboard-card-title"><EnvironmentOutlined />终端客户地域覆盖</span>
-            <small>按省份沉淀终端客户覆盖深度与区域集中度</small>
+            <span className="dashboard-card-title"><EnvironmentOutlined />终端机构地域覆盖</span>
+            <small>按省份沉淀终端机构覆盖深度与区域集中度</small>
           </span>
           <span className="dashboard-map-summary">
             <span>覆盖 {coverageRate}%</span>
@@ -437,7 +468,7 @@ function ChinaMapCard({ data, loading }: { data: CountItem[] | null; loading: bo
               className="dashboard-map-svg"
               viewBox={`0 0 ${MAP_VIEWBOX_WIDTH} ${MAP_VIEWBOX_HEIGHT}`}
               role="img"
-              aria-label="终端客户省份构成地图"
+              aria-label="终端机构省份构成地图"
             >
               <g>
                 {mapFeatures.map(feature => {
@@ -458,18 +489,47 @@ function ChinaMapCard({ data, loading }: { data: CountItem[] | null; loading: bo
                   );
                 })}
               </g>
+              <g className="dashboard-map-callouts">
+                {calloutProvinceLabels.map(label => {
+                  const callout = label.callout!;
+                  const boxX = callout.anchor === 'end' ? callout.x - MAP_CALLOUT_WIDTH : callout.x;
+                  const lineEndX = callout.anchor === 'end' ? boxX + MAP_CALLOUT_WIDTH : boxX;
+                  const centerY = callout.y + MAP_CALLOUT_HEIGHT / 2;
+
+                  return (
+                    <g key={label.feature.name} className="dashboard-map-callout">
+                      <line
+                        x1={label.feature.labelX}
+                        y1={label.feature.labelY}
+                        x2={lineEndX}
+                        y2={centerY}
+                      />
+                      <rect
+                        x={boxX}
+                        y={callout.y}
+                        width={MAP_CALLOUT_WIDTH}
+                        height={MAP_CALLOUT_HEIGHT}
+                        rx={7}
+                      />
+                      <text x={boxX + MAP_CALLOUT_WIDTH / 2} y={callout.y + 8}>
+                        <tspan x={boxX + MAP_CALLOUT_WIDTH / 2}>{shortProvinceName(label.feature.name)}</tspan>
+                        <tspan x={boxX + MAP_CALLOUT_WIDTH / 2} dy="1.15em">{label.value}家</tspan>
+                      </text>
+                    </g>
+                  );
+                })}
+              </g>
               <g className="dashboard-map-labels">
-                {mapFeatures
-                  .filter(feature => labeledProvinceNames.has(feature.name))
-                  .map(feature => (
+                {inlineProvinceLabels
+                  .map(label => (
                     <text
-                      key={feature.name}
+                      key={label.feature.name}
                       className="dashboard-map-label"
-                      x={feature.labelX}
-                      y={feature.labelY}
+                      x={label.feature.labelX}
+                      y={label.feature.labelY}
                     >
-                      <tspan x={feature.labelX} dy="-0.35em">{shortProvinceName(feature.name)}</tspan>
-                      <tspan x={feature.labelX} dy="1.15em">{provinceMap.get(feature.name) ?? 0}家</tspan>
+                      <tspan x={label.feature.labelX} dy="-0.35em">{shortProvinceName(label.feature.name)}</tspan>
+                      <tspan x={label.feature.labelX} dy="1.15em">{label.value}家</tspan>
                     </text>
                   ))}
               </g>
@@ -484,7 +544,7 @@ function ChinaMapCard({ data, loading }: { data: CountItem[] | null; loading: bo
               }}
             >
               <strong>{hoveredProvince.name}</strong>
-              <span>终端客户：{hoveredProvince.value} 家</span>
+              <span>终端机构：{hoveredProvince.value} 家</span>
               <span>占比：{hoveredProvince.share.toFixed(1)}%</span>
             </div>
           ) : null}
@@ -504,7 +564,7 @@ function ChinaMapCard({ data, loading }: { data: CountItem[] | null; loading: bo
           <div className="dashboard-rank-head">
             <span>
               省份排行
-              <small>按终端客户数量</small>
+              <small>按终端机构数量</small>
             </span>
             <strong>Top {displayProvinces.length}</strong>
           </div>
@@ -615,19 +675,19 @@ export default function DashboardPage() {
     {
       label: '地域覆盖',
       value: `${provinceAnalysisData.length}/${MAP_PROVINCE_TOTAL} 个省级区域`,
-      description: `已沉淀 ${provinceTotal || endCustomerCount} 家终端客户，Top3 省份贡献 ${formatPercent(top3ProvinceShare)}%。`,
+      description: `已沉淀 ${provinceTotal || endCustomerCount} 家终端机构，Top3 省份贡献 ${formatPercent(top3ProvinceShare)}%。`,
       tone: 'blue',
     },
     {
       label: '渠道效率',
       value: `${formatNumber(penetration, 1)} 家/经销商`,
-      description: `经销商 ${distributorCount} 家，终端客户 ${endCustomerCount} 家，可用于观察渠道承接强度。`,
+      description: `经销商 ${distributorCount} 家，终端机构 ${endCustomerCount} 家，可用于观察渠道承接强度。`,
       tone: 'teal',
     },
     {
       label: '客户结构',
       value: topEndType ? `${topEndType.name} ${formatPercent(topEndTypeShare)}%` : '暂无结构数据',
-      description: topEndType ? `主力终端类型为 ${topEndType.name}，需结合区域覆盖判断资源投放。` : '暂无终端客户类型分布。',
+      description: topEndType ? `主力终端类型为 ${topEndType.name}，需结合区域覆盖判断资源投放。` : '暂无终端机构类型分布。',
       tone: 'amber',
     },
     {
@@ -666,7 +726,7 @@ export default function DashboardPage() {
             loading={loading}
             badge={penetration >= 5 ? '承接较强' : '持续培育'}
             badgeTone={penetration >= 5 ? 'success' : 'warning'}
-            description={`终端客户 ${endCustomerCount} 家`}
+            description={`终端机构 ${endCustomerCount} 家`}
             metaLabel="经销商"
             metaValue={`${distributorCount} 家`}
           />
@@ -790,7 +850,7 @@ export default function DashboardPage() {
                 className="dashboard-card"
                 title={(
                   <span className="dashboard-title-copy">
-                    <span>终端客户类型结构</span>
+                    <span>终端机构类型结构</span>
                     <small>识别主要服务场景与客户组合</small>
                   </span>
                 )}

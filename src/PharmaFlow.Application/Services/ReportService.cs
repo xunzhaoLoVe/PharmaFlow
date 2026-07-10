@@ -318,7 +318,7 @@ public class ReportService : IReportService
     private static List<ReportDimensionItemDto> BuildDealerLevelDistribution(IEnumerable<Customer> customers)
     {
         var levelRows = customers
-            .GroupBy(c => IsDealer(c) ? (c.Level?.ToString() ?? "未分级经销商") : "终端客户")
+            .GroupBy(c => IsDealer(c) ? (c.Level?.ToString() ?? "未分级经销商") : "终端机构")
             .Select(g => new ReportDimensionItemDto
             {
                 Name = g.Key,

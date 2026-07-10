@@ -18,6 +18,8 @@ public class Customer : AuditableEntity
     public CustomerType CustomerType { get; set; }
     /// <summary>经销商级别（仅对经销商业类型有效）</summary>
     public DistributorLevel? Level { get; set; }
+    /// <summary>机构角色（仅对经销商业类型有效）</summary>
+    public DistributorRole? DistributorRole { get; set; }
 
     public Guid? CategoryId { get; set; }
     public CustomerCategory? Category { get; set; }

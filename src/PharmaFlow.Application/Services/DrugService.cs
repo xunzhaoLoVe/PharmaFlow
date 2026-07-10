@@ -66,6 +66,16 @@ public class DrugService : IDrugService
 
     public async Task<DrugDto> CreateAsync(DrugDto dto)
     {
+        var existing = await FindActiveByNameAndSpecAsync(dto.Name, dto.Specification);
+        if (existing != null)
+        {
+            SupplementDrug(existing, dto);
+            await AdoptCollectionCreatedMasterDataAsync("Drug", existing.Id);
+            existing.UpdatedAt = DateTime.UtcNow;
+            await _db.SaveChangesAsync();
+            return MapDrugToDto(existing);
+        }
+
         // Auto-generate drug code if empty or if the provided code already exists (including soft-deleted)
         if (string.IsNullOrWhiteSpace(dto.Code) ||
             await _db.Drugs.IgnoreQueryFilters().AnyAsync(d => d.Code == dto.Code))
@@ -84,8 +94,12 @@ public class DrugService : IDrugService
         {
             Code = dto.Code,
             Name = dto.Name,
+            GenericName = dto.GenericName,
             Specification = dto.Specification,
-            Unit = "盒",
+            ApprovalNumber = dto.ApprovalNumber,
+            CategoryId = dto.CategoryId,
+            Unit = string.IsNullOrWhiteSpace(dto.Unit) ? "盒" : dto.Unit,
+            WarningLowQuantity = dto.WarningLowQuantity,
         };
         _db.Drugs.Add(drug);
         try
@@ -97,8 +111,7 @@ public class DrugService : IDrugService
             _db.Entry(drug).State = EntityState.Detached;
             throw;
         }
-        dto.Id = drug.Id;
-        return dto;
+        return MapDrugToDto(drug);
     }
 
     public async Task UpdateAsync(DrugDto dto)
@@ -112,6 +125,7 @@ public class DrugService : IDrugService
         drug.ApprovalNumber = dto.ApprovalNumber;
         drug.CategoryId = dto.CategoryId;
         drug.UpdatedAt = DateTime.UtcNow;
+        await AdoptCollectionCreatedMasterDataAsync("Drug", drug.Id);
         await _db.SaveChangesAsync();
     }
 
@@ -147,9 +161,54 @@ public class DrugService : IDrugService
         return new DropdownItem { Id = cat.Id, Name = cat.Name };
     }
 
+    private async Task<Drug?> FindActiveByNameAndSpecAsync(string name, string? spec)
+    {
+        var drugs = await _db.Drugs.Where(d => !d.IsDeleted).ToListAsync();
+        var key = MasterDataMatchHelper.DrugKey(name, spec);
+        return drugs.FirstOrDefault(d => MasterDataMatchHelper.DrugKey(d.Name, d.Specification) == key);
+    }
+
+    private static DrugDto MapDrugToDto(Drug d) => new()
+    {
+        Id = d.Id,
+        Code = d.Code,
+        Name = d.Name,
+        GenericName = d.GenericName,
+        Specification = d.Specification,
+        Manufacturer = d.Manufacturer,
+        ApprovalNumber = d.ApprovalNumber,
+        DosageForm = d.DosageForm,
+        Unit = d.Unit,
+        CategoryName = d.Category?.Name,
+        CategoryId = d.CategoryId,
+        WarningLowQuantity = d.WarningLowQuantity,
+    };
+
+    private static void SupplementDrug(Drug target, DrugDto source)
+    {
+        var changed = false;
+        if (string.IsNullOrWhiteSpace(target.GenericName) && !string.IsNullOrWhiteSpace(source.GenericName)) { target.GenericName = source.GenericName; changed = true; }
+        if (string.IsNullOrWhiteSpace(target.Manufacturer) && !string.IsNullOrWhiteSpace(source.Manufacturer)) { target.Manufacturer = source.Manufacturer; changed = true; }
+        if (string.IsNullOrWhiteSpace(target.ApprovalNumber) && !string.IsNullOrWhiteSpace(source.ApprovalNumber)) { target.ApprovalNumber = source.ApprovalNumber; changed = true; }
+        if (string.IsNullOrWhiteSpace(target.DosageForm) && !string.IsNullOrWhiteSpace(source.DosageForm)) { target.DosageForm = source.DosageForm; changed = true; }
+        if ((string.IsNullOrWhiteSpace(target.Unit) || target.Unit == "盒") && !string.IsNullOrWhiteSpace(source.Unit)) { target.Unit = source.Unit; changed = true; }
+        if (!target.CategoryId.HasValue && source.CategoryId.HasValue) { target.CategoryId = source.CategoryId; changed = true; }
+        if (target.WarningLowQuantity == 0 && source.WarningLowQuantity > 0) { target.WarningLowQuantity = source.WarningLowQuantity; changed = true; }
+        if (changed) target.UpdatedAt = DateTime.UtcNow;
+    }
+
+    private async Task AdoptCollectionCreatedMasterDataAsync(string entityType, Guid entityId)
+    {
+        var trackingRows = await _db.CollectionSyncEntities
+            .Where(e => e.EntityType == entityType && e.EntityId == entityId)
+            .ToListAsync();
+        if (trackingRows.Count > 0)
+            _db.CollectionSyncEntities.RemoveRange(trackingRows);
+    }
+
     public async Task<bool> ExistsByNameAndSpec(string name, string? spec)
     {
-        return await _db.Drugs.AnyAsync(d => d.Name == name && d.Specification == spec && !d.IsDeleted);
+        return await FindActiveByNameAndSpecAsync(name, spec) != null;
     }
 
     public async Task<string> GetCompanyNameAsync()

@@ -70,8 +70,9 @@ export default function App() {
         },
       }}
     >
-      <BrowserRouter>
-        <Routes>
+      <div translate="no" className="notranslate">
+        <BrowserRouter>
+          <Routes>
           <Route path="/" element={<LandingPage />} />
           <Route path="/login" element={<LoginPage />} />
           <Route element={<PrivateRoute><AppLayout /></PrivateRoute>}>
@@ -93,8 +94,9 @@ export default function App() {
             <Route path="datacollection/summary" element={<CollectionPage />} />
           </Route>
           <Route path="*" element={<Navigate to="/" replace />} />
-        </Routes>
-      </BrowserRouter>
+          </Routes>
+        </BrowserRouter>
+      </div>
     </ConfigProvider>
   );
 }

@@ -30,7 +30,7 @@ const featureCards = [
   },
   {
     title: '客户治理',
-    desc: '经销商、终端客户分层管理，重复客户名称不重复统计。',
+    desc: '经销商、终端机构分层管理，重复客户名称不重复统计。',
     icon: <UserSwitchOutlined />,
     tone: 'green',
   },

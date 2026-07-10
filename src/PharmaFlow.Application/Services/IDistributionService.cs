@@ -6,9 +6,9 @@ public interface IDistributionService
 {
     Task<PagedResult<DistributionRecordDto>> GetPagedAsync(int pageIndex, int pageSize, string? drugName = null, string? batchNo = null, Guid? customerId = null, DateTime? from = null, DateTime? to = null, bool? fromSelf = null);
     Task<FlowGraphDto?> GetTraceAsync(string batchNo, Guid drugId);
-    Task RecordDownstreamAsync(DownstreamRecordDto dto, string operatorName);
+    Task<DistributionImportResultDto> RecordDownstreamAsync(DownstreamRecordDto dto, string operatorName);
     /// <summary>批量导入下游出货记录，一次性提交</summary>
-    Task<int> RecordDownstreamBatchAsync(List<DownstreamRecordDto> dtos, string operatorName);
+    Task<DistributionImportResultDto> RecordDownstreamBatchAsync(List<DownstreamRecordDto> dtos, string operatorName);
     Task<IReadOnlyList<DropdownItem>> GetCustomerDropdownAsync();
     Task DeleteDistributionRecordAsync(Guid recordId);
     /// <summary>清空所有流向记录和库存数据（物理删除），返回删除的流向记录条数</summary>
@@ -16,6 +16,13 @@ public interface IDistributionService
     Task<int> ClearBySourceAsync(bool isPurchase);
     Task UpdateDistributionRecordAsync(Guid recordId, decimal newQuantity);
     Task<IReadOnlyList<ChannelConflictDto>> GetChannelConflictsAsync(string? batchNo = null);
+}
+
+public record DistributionImportResultDto
+{
+    public int Imported { get; set; }
+    public int Skipped { get; set; }
+    public int Supplemented { get; set; }
 }
 
 public record DistributionRecordDto

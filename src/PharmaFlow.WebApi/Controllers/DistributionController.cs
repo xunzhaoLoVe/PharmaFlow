@@ -72,12 +72,12 @@ public class DistributionController : ControllerBase
         if (dto.FromCustomerId == Guid.Empty && dto.SupplierId == null)
             dto.SupplierId = await GetDefaultSupplierIdAsync();
         var operatorName = User.FindFirst(System.Security.Claims.ClaimTypes.Name)?.Value ?? "系统";
-        await _distributionService.RecordDownstreamAsync(dto, operatorName);
-        return Ok(ApiResponse.Ok("流转记录成功"));
+        var result = await _distributionService.RecordDownstreamAsync(dto, operatorName);
+        return Ok(ApiResponse.Ok(result.Imported > 0 ? "流转记录成功" : "记录已存在，未重复新增"));
     }
 
     [HttpPost("downstream/batch")]
-    public async Task<ActionResult<ApiResponse<int>>> RecordDownstreamBatch(
+    public async Task<ActionResult<ApiResponse<DistributionImportResultDto>>> RecordDownstreamBatch(
         [FromBody] List<DownstreamRecordDto> dtos)
     {
         var supplierId = await GetDefaultSupplierIdAsync();
@@ -87,8 +87,8 @@ public class DistributionController : ControllerBase
                 dto.SupplierId = supplierId;
         }
         var operatorName = User.FindFirst(System.Security.Claims.ClaimTypes.Name)?.Value ?? "系统";
-        var count = await _distributionService.RecordDownstreamBatchAsync(dtos, operatorName);
-        return Ok(ApiResponse<int>.Ok(count, $"成功记录 {count} 条"));
+        var result = await _distributionService.RecordDownstreamBatchAsync(dtos, operatorName);
+        return Ok(ApiResponse<DistributionImportResultDto>.Ok(result, $"新增 {result.Imported} 条，跳过重复 {result.Skipped} 条"));
     }
 
     [HttpPut("{id:guid}")]

@@ -73,6 +73,15 @@ public record CustomerDto
     public Guid? CategoryId { get; set; }
     public int? Level { get; set; }
     public string? LevelName { get; set; }
+    public int? DistributorRole { get; set; }
+    public string? DistributorRoleName { get; set; }
+}
+
+public record CustomerImportResultDto
+{
+    public int Imported { get; set; }
+    public int Supplemented { get; set; }
+    public int Skipped { get; set; }
 }
 
 public record SupplierDto

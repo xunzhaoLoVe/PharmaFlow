@@ -15,8 +15,26 @@ import { textSorter } from '../../utils/tableSorters';
 import type { CustomerDto, DropdownItem } from '../../types';
 
 const PROVINCES = ['','北京','天津','河北','山西','内蒙古','辽宁','吉林','黑龙江','上海','江苏','浙江','安徽','福建','江西','山东','河南','湖北','湖南','广东','广西','海南','重庆','四川','贵州','云南','西藏','陕西','甘肃','青海','宁夏','新疆'];
-const DISTRIBUTOR_LEVELS = ['','一级经销商','二级经销商','三级经销商'];
-const END_TYPES = ['卫生院','医院','其他','卫生服务中心','卫生室','药房','门诊','诊所','卫生服务站','二级经销商'];
+const DISTRIBUTOR_LEVELS = ['一级经销商','二级经销商','三级经销商'];
+const DISTRIBUTOR_ROLES = ['商业公司','配送公司','代理商','其他'];
+const distributorRoleToValue = (roleName?: string) => {
+  switch (roleName) {
+    case '商业公司': return 1;
+    case '配送公司': return 2;
+    case '代理商': return 3;
+    case '其他': return 4;
+    default: return null;
+  }
+};
+const END_TYPES = ['医院','基层医疗机构','诊所','药店','其他'];
+const normalizeEndType = (value?: string) => {
+  const text = (value || '').trim();
+  if (['卫生院','卫生服务中心','卫生室','卫生服务站'].includes(text)) return '基层医疗机构';
+  if (text === '药房') return '药店';
+  if (text === '门诊') return '诊所';
+  if (END_TYPES.includes(text)) return text;
+  return text || '医院';
+};
 
 export default function CustomerListPage() {
   const canWrite = useAuthStore(s => s.canWrite);
@@ -50,28 +68,38 @@ export default function CustomerListPage() {
   const handleAdd = () => {
     setEditing(null);
     form.resetFields();
-    form.setFieldsValue({ customerTypeName: isDistributor ? '商业' : '医院', levelName: '' });
+    form.setFieldsValue({ customerTypeName: isDistributor ? '商业' : '医院', levelName: undefined, distributorRoleName: undefined });
     setModalOpen(true);
   };
   const handleEdit = (record: CustomerDto) => {
     setEditing(record);
-    form.setFieldsValue({ code: record.code, name: record.name, province: record.province, drugName: record.drugName, levelName: record.levelName, customerTypeName: record.customerTypeName });
+    form.setFieldsValue({ code: record.code, name: record.name, province: record.province || undefined, drugName: record.drugName || undefined, levelName: record.levelName || undefined, distributorRoleName: record.distributorRoleName || undefined, customerTypeName: isDistributor ? record.customerTypeName : normalizeEndType(record.customerTypeName) });
     setModalOpen(true);
   };
   const handleDelete = async (id: string) => { await deleteCustomer(id); message.success('已删除'); load(); };
 
   // 去重检查
-  const isDup = (name: string, province: string, drugName: string, levelName?: string, typeName?: string) => {
+  const isDup = (name: string, province: string, drugName: string, levelName?: string, typeName?: string, distributorRoleName?: string) => {
     return data.some(d => d.name === name && (d.province || '') === province && (d.drugName || '') === drugName &&
-      (isDistributor ? ((d.levelName || '') === (levelName || '')) : ((d.customerTypeName || '') === (typeName || ''))));
+      (isDistributor
+        ? ((d.levelName || '') === (levelName || '') && (d.distributorRoleName || '') === (distributorRoleName || ''))
+        : ((d.customerTypeName || '') === (typeName || ''))));
   };
 
   const handleOk = async () => {
     const values = await form.validateFields();
-    if (!editing && isDup(values.name, values.province || '', values.drugName || '', values.levelName, values.customerTypeName)) {
-      message.warning('已存在相同名称、省份、药品名称、' + (isDistributor ? '级别' : '类型') + '的客户'); return;
+    if (!isDistributor) values.customerTypeName = normalizeEndType(values.customerTypeName);
+    else values.customerTypeName = '商业';
+    const distributorRole = isDistributor ? distributorRoleToValue(values.distributorRoleName) : null;
+    if (!editing && isDup(values.name, values.province || '', values.drugName || '', values.levelName, values.customerTypeName, values.distributorRoleName)) {
+      message.warning('已存在相同名称、省份、药品名称、' + (isDistributor ? '机构角色、级别' : '类型') + '的客户'); return;
     }
-    const dto = { ...values, level: values.levelName === '一级经销商' ? 1 : values.levelName === '二级经销商' ? 2 : values.levelName === '三级经销商' ? 3 : null };
+    const dto = {
+      ...values,
+      level: values.levelName === '一级经销商' ? 1 : values.levelName === '二级经销商' ? 2 : values.levelName === '三级经销商' ? 3 : null,
+      distributorRole,
+      distributorRoleName: isDistributor ? values.distributorRoleName : '',
+    };
     if (editing) { await updateCustomer(editing.id, dto); message.success('更新成功'); }
     else { await createCustomer(dto); message.success('创建成功'); }
     setModalOpen(false); load();
@@ -94,6 +122,7 @@ export default function CustomerListPage() {
         const nameCol = findCol(['名称','经销商名称','客户名称','公司名称','终端名称','医院名称','药店名称']);
         const drugCol = findCol(['药品名称','药品','经销药品']);
         const levelCol = findCol(['经销商级别','级别','等级']);
+        const roleCol = findCol(['机构角色','角色','经销商角色','商业角色']);
         const typeCol = findCol(['类型','客户类型','终端类型']);
         const provinceCol = findCol(['省份','省','区域']);
         if (!nameCol) { message.error('未找到"名称"列'); return; }
@@ -105,18 +134,24 @@ export default function CustomerListPage() {
           const prov = provinceCol ? (row[provinceCol] || '').trim() : '';
           const drug = drugCol ? (row[drugCol] || '').trim() : '';
           const lvlName = (levelCol ? (row[levelCol] || '').trim() : '');
-          const typName = typeCol ? (row[typeCol] || '').trim() || (isDistributor ? '商业' : '医院') : (isDistributor ? '商业' : '医院');
-          if (isDup(name, prov, drug, lvlName, typName)) { skipped++; continue; }
+          const roleName = isDistributor && roleCol ? (row[roleCol] || '').trim() : '';
+          const rawTypeName = typeCol ? (row[typeCol] || '').trim() || (isDistributor ? '商业' : '医院') : (isDistributor ? '商业' : '医院');
+          const typName = isDistributor ? '商业' : normalizeEndType(rawTypeName);
+          if (isDup(name, prov, drug, lvlName, typName, roleName)) { skipped++; continue; }
           dtos.push({ code: '', name, province: prov, drugName: drug, customerTypeName: typName,
+            distributorRole: distributorRoleToValue(roleName), distributorRoleName: roleName,
             level: lvlName === '一级经销商' ? 1 : lvlName === '二级经销商' ? 2 : lvlName === '三级经销商' ? 3 : null });
         }
         if (dtos.length === 0) { message.warning(`无有效数据，跳过 ${skipped} 条`); return; }
-        const BATCH = 500; let imported = 0;
+        const BATCH = 500; let imported = 0, supplemented = 0, duplicateSkipped = 0;
         for (let i = 0; i < dtos.length; i += BATCH) {
           const res = await apiClient.post(`/customers/import?isEndCustomer=${!isDistributor}`, dtos.slice(i, i + BATCH));
-          imported += (res as any).data || 0;
+          const result = (res as any).data || { imported: 0, supplemented: 0, skipped: 0 };
+          imported += result.imported || 0;
+          supplemented += result.supplemented || 0;
+          duplicateSkipped += result.skipped || 0;
         }
-        message.success(`导入完成: ${imported} 条` + (skipped > 0 ? `, 跳过 ${skipped} 条` : '')); load();
+        message.success(`导入完成: 新增 ${imported} 条` + (supplemented > 0 ? `，补充 ${supplemented} 条` : '') + (duplicateSkipped > 0 ? `，跳过重复 ${duplicateSkipped} 条` : '') + (skipped > 0 ? `，跳过无效 ${skipped} 条` : '')); load();
       } catch (ex: any) {
         message.error('Excel 解析失败: ' + (ex.message || '未知错误'));
       }
@@ -134,6 +169,10 @@ export default function CustomerListPage() {
     },
     { title: '药品名称', dataIndex: 'drugName', width: 140,
       sorter: textSorter<CustomerDto>(r => r.drugName),
+    },
+    { title: '机构角色', dataIndex: 'distributorRoleName', width: 110,
+      sorter: textSorter<CustomerDto>(r => r.distributorRoleName),
+      render: v => v || '-',
     },
     { title: '级别', dataIndex: 'levelName', width: 100,
       sorter: textSorter<CustomerDto>(r => r.levelName),
@@ -167,9 +206,14 @@ export default function CustomerListPage() {
   const filterFields: TableFilterField<CustomerDto>[] = [
     { key: 'province', label: '省份', getValue: r => r.province },
     { key: 'drugName', label: '药品名称', getValue: r => r.drugName },
-    isDistributor
-      ? { key: 'levelName', label: '级别', getValue: r => r.levelName }
-      : { key: 'customerTypeName', label: '类型', getValue: r => r.customerTypeName },
+    ...(isDistributor
+      ? [
+          { key: 'distributorRoleName', label: '机构角色', getValue: (r: CustomerDto) => r.distributorRoleName },
+          { key: 'levelName', label: '级别', getValue: (r: CustomerDto) => r.levelName },
+        ]
+      : [
+          { key: 'customerTypeName', label: '类型', getValue: (r: CustomerDto) => r.customerTypeName },
+        ]),
   ];
   const tableData = applyTableFilters(data, filterFields, tableFilters);
 
@@ -185,19 +229,19 @@ export default function CustomerListPage() {
           <Button icon={<UploadOutlined />}>导入Excel</Button>
         </Upload>}
         {canWrite && <Button danger icon={<DeleteOutlined />} onClick={async () => {
-          if (window.confirm(`确定清空所有${isDistributor ? '经销商' : '终端客户'}？`)) {
+          if (window.confirm(`确定清空所有${isDistributor ? '经销商' : '终端机构'}？`)) {
             await apiClient.delete(`/customers/clear?type=${typeFilter}`); message.success('已清空'); load();
           }
         }}>清空</Button>}
       </Space>
       <Table rowKey="id" columns={isDistributor ? distColumns : endColumns} dataSource={tableData} loading={loading}
         pagination={{ defaultPageSize: 10, showTotal: () => `共 ${tableData.length} 条`, showSizeChanger: true }} />
-      <Modal title={editing ? '编辑客户' : '新增客户'} open={modalOpen} onOk={handleOk} onCancel={() => setModalOpen(false)}>
-        <Form form={form} layout="vertical">
+      <Modal title={editing ? '编辑客户' : '新增客户'} open={modalOpen} onOk={handleOk} onCancel={() => setModalOpen(false)} okText="确定" cancelText="取消" className="notranslate">
+        <Form form={form} layout="vertical" className="notranslate">
           <Form.Item name="name" label="客户名称" rules={[{ required: true }]}><Input /></Form.Item>
           <Form.Item name="code" label="编码"><Input placeholder="留空自动生成" /></Form.Item>
           <Form.Item name="province" label="省份">
-            <Select options={PROVINCES.map(p => ({ label: p || '请选择', value: p }))} /></Form.Item>
+            <Select allowClear options={PROVINCES.filter(Boolean).map(p => ({ label: p, value: p }))} /></Form.Item>
           <Form.Item name="drugName" label="药品名称">
             <Select showSearch allowClear placeholder="选择药品" filterOption={(v, o) => (o?.label as string || '').includes(v)}
               options={[...new Map(drugOptions.map(d => {
@@ -205,11 +249,24 @@ export default function CustomerListPage() {
                 return [name, { label: name, value: name }];
               })).values()]} /></Form.Item>
           {isDistributor ? (
-            <Form.Item name="levelName" label="经销商级别">
-              <Select options={DISTRIBUTOR_LEVELS.map(l => ({ label: l || '无', value: l }))} /></Form.Item>
+            <>
+              <Form.Item name="distributorRoleName" label="机构角色">
+                <Select allowClear>
+                  {DISTRIBUTOR_ROLES.map(role => <Select.Option key={role} value={role}>{role}</Select.Option>)}
+                </Select>
+              </Form.Item>
+              <Form.Item name="levelName" label="经销商级别">
+                <Select allowClear>
+                  {DISTRIBUTOR_LEVELS.map(level => <Select.Option key={level} value={level}>{level}</Select.Option>)}
+                </Select>
+              </Form.Item>
+            </>
           ) : (
             <Form.Item name="customerTypeName" label="客户类型">
-              <Select options={END_TYPES.map(t => ({ label: t, value: t }))} /></Form.Item>
+              <Select>
+                {END_TYPES.map(type => <Select.Option key={type} value={type}>{type}</Select.Option>)}
+              </Select>
+            </Form.Item>
           )}
         </Form>
       </Modal>

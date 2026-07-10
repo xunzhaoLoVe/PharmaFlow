@@ -68,51 +68,79 @@ public class DistributionService : IDistributionService
         };
     }
 
-    public async Task RecordDownstreamAsync(DownstreamRecordDto dto, string operatorName)
+    public async Task<DistributionImportResultDto> RecordDownstreamAsync(DownstreamRecordDto dto, string operatorName)
     {
         var self = await _db.Customers.FirstOrDefaultAsync(c => c.Code == "SELF");
         if (self == null) throw new InvalidOperationException("系统错误：本公司(SELF)记录不存在");
-        await RecordOneAsync(dto, operatorName, self.Id);
+        var result = await RecordOneAsync(dto, operatorName, self.Id);
         await _db.SaveChangesAsync();
+        return result;
     }
 
     /// <summary>批量导入下游出货记录，一次性提交（性能优化）</summary>
-    public async Task<int> RecordDownstreamBatchAsync(List<DownstreamRecordDto> dtos, string operatorName)
+    public async Task<DistributionImportResultDto> RecordDownstreamBatchAsync(List<DownstreamRecordDto> dtos, string operatorName)
     {
-        if (dtos.Count == 0) return 0;
+        var result = new DistributionImportResultDto();
+        if (dtos.Count == 0) return result;
 
         var self = await _db.Customers.FirstOrDefaultAsync(c => c.Code == "SELF");
         if (self == null) throw new InvalidOperationException("系统错误：本公司(SELF)记录不存在");
 
-        // 预加载所有相关库存
         var drugIds = dtos.Select(d => d.DrugId).Distinct().ToList();
         var batchNos = dtos.Select(d => d.BatchNo).Distinct().ToList();
-        var customerIds = dtos.Select(d => d.ToCustomerId == Guid.Empty ? self.Id : d.ToCustomerId).Distinct().ToList();
+        var toCustomerIds = dtos.Select(d => d.ToCustomerId == Guid.Empty ? self.Id : d.ToCustomerId);
+        var fromCustomerIds = dtos
+            .Where(d => !d.SupplierId.HasValue || d.SupplierId == Guid.Empty)
+            .Select(d => d.FromCustomerId == Guid.Empty ? self.Id : d.FromCustomerId);
+        var customerIds = toCustomerIds.Concat(fromCustomerIds).Distinct().ToList();
 
         var inventories = await _db.Inventories
             .Where(i => drugIds.Contains(i.DrugId) && batchNos.Contains(i.BatchNo) && i.CustomerId.HasValue && customerIds.Contains(i.CustomerId.Value))
             .ToListAsync();
         var invDict = inventories.ToDictionary(i => (i.DrugId, i.BatchNo, i.CustomerId!.Value), i => i);
 
-        var imported = 0;
+        var existingRecords = await _db.DistributionRecords
+            .Where(r => drugIds.Contains(r.DrugId) && batchNos.Contains(r.BatchNo))
+            .ToListAsync();
+        var existingByKey = existingRecords
+            .GroupBy(BuildDistributionKey, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
+        var seenKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
         foreach (var dto in dtos)
         {
             bool hasSupplier = dto.SupplierId.HasValue && dto.SupplierId != Guid.Empty;
             Guid? fromCustomerId = hasSupplier ? null : (dto.FromCustomerId == Guid.Empty ? self.Id : dto.FromCustomerId);
-            Guid toId = dto.ToCustomerId == Guid.Empty ? self.Id : dto.ToCustomerId;
+            Guid? toId = dto.ToCustomerId == Guid.Empty ? self.Id : dto.ToCustomerId;
+            var distributionDate = ParseDistributionDate(dto);
+            var key = BuildDistributionKey(dto.DrugId, dto.BatchNo, hasSupplier ? dto.SupplierId : null, fromCustomerId, toId, dto.Quantity, dto.DeliveryOrderNo, distributionDate);
 
-            _db.DistributionRecords.Add(new DistributionRecord
+            if (!seenKeys.Add(key))
+            {
+                result.Skipped++;
+                continue;
+            }
+
+            if (existingByKey.TryGetValue(key, out var existing))
+            {
+                if (SupplementDistributionRecord(existing, dto, distributionDate)) result.Supplemented++;
+                result.Skipped++;
+                continue;
+            }
+
+            var record = new DistributionRecord
             {
                 DrugId = dto.DrugId, BatchNo = dto.BatchNo,
                 SupplierId = hasSupplier ? dto.SupplierId : null,
                 FromCustomerId = fromCustomerId, ToCustomerId = toId,
                 Quantity = dto.Quantity, SalesPerson = dto.SalesPerson,
                 DeliveryOrderNo = dto.DeliveryOrderNo, TaxedUnitPrice = dto.TaxedUnitPrice,
-                DistributionDate = DateTime.TryParse(dto.DistributionDateDisplay ?? dto.DistributionDate.ToString("yyyy-MM-dd"), out var dd) ? dd : DateTime.Now,
+                DistributionDate = distributionDate,
                 DistributionDateDisplay = dto.DistributionDateDisplay, Operator = operatorName, Province = dto.Province,
-            });
+            };
+            _db.DistributionRecords.Add(record);
+            existingByKey[key] = record;
 
-            // 库存：有供应商时只增加到本公司(toId)库存；纯流转时From出货To入库
             if (!hasSupplier && fromCustomerId.HasValue)
             {
                 var fromKey = (dto.DrugId, dto.BatchNo, fromCustomerId.Value);
@@ -120,27 +148,42 @@ public class DistributionService : IDistributionService
                 { fromInv.Quantity -= dto.Quantity; if (fromInv.Quantity < 0) fromInv.Quantity = 0; }
             }
 
-            var toKey = (dto.DrugId, dto.BatchNo, toId);
-            if (invDict.TryGetValue(toKey, out var toInv))
-            { toInv.Quantity += dto.Quantity; if (toInv.Quantity < 0) toInv.Quantity = 0; }
-            else if (dto.Quantity > 0)
+            if (toId.HasValue)
             {
-                var newInv = new Inventory { DrugId = dto.DrugId, BatchNo = dto.BatchNo, Quantity = dto.Quantity, CustomerId = toId };
-                _db.Inventories.Add(newInv);
-                invDict[toKey] = newInv;
+                var toKey = (dto.DrugId, dto.BatchNo, toId.Value);
+                if (invDict.TryGetValue(toKey, out var toInv))
+                { toInv.Quantity += dto.Quantity; if (toInv.Quantity < 0) toInv.Quantity = 0; }
+                else if (dto.Quantity > 0)
+                {
+                    var newInv = new Inventory { DrugId = dto.DrugId, BatchNo = dto.BatchNo, Quantity = dto.Quantity, CustomerId = toId.Value };
+                    _db.Inventories.Add(newInv);
+                    invDict[toKey] = newInv;
+                }
             }
-            imported++;
+            result.Imported++;
         }
 
         await _db.SaveChangesAsync();
-        return imported;
+        return result;
     }
 
-    private async Task RecordOneAsync(DownstreamRecordDto dto, string operatorName, Guid selfId)
+    private async Task<DistributionImportResultDto> RecordOneAsync(DownstreamRecordDto dto, string operatorName, Guid selfId)
     {
         bool hasSupplier = dto.SupplierId.HasValue && dto.SupplierId != Guid.Empty;
         Guid? fromId = hasSupplier ? null : (dto.FromCustomerId == Guid.Empty ? selfId : dto.FromCustomerId);
         Guid? toId = dto.ToCustomerId == Guid.Empty ? selfId : dto.ToCustomerId;
+        var distributionDate = ParseDistributionDate(dto);
+        var key = BuildDistributionKey(dto.DrugId, dto.BatchNo, hasSupplier ? dto.SupplierId : null, fromId, toId, dto.Quantity, dto.DeliveryOrderNo, distributionDate);
+
+        var existingRecords = await _db.DistributionRecords
+            .Where(r => r.DrugId == dto.DrugId && r.BatchNo == dto.BatchNo)
+            .ToListAsync();
+        var existing = existingRecords.FirstOrDefault(r => string.Equals(BuildDistributionKey(r), key, StringComparison.OrdinalIgnoreCase));
+        if (existing != null)
+        {
+            var supplemented = SupplementDistributionRecord(existing, dto, distributionDate);
+            return new DistributionImportResultDto { Skipped = 1, Supplemented = supplemented ? 1 : 0 };
+        }
 
         _db.DistributionRecords.Add(new DistributionRecord
         {
@@ -149,8 +192,8 @@ public class DistributionService : IDistributionService
             FromCustomerId = fromId, ToCustomerId = toId,
             Quantity = dto.Quantity, SalesPerson = dto.SalesPerson,
             DeliveryOrderNo = dto.DeliveryOrderNo, TaxedUnitPrice = dto.TaxedUnitPrice,
-            DistributionDate = DateTime.TryParse(dto.DistributionDateDisplay ?? dto.DistributionDate.ToString("yyyy-MM-dd"), out var dd) ? dd : DateTime.Now,
-                DistributionDateDisplay = dto.DistributionDateDisplay, Operator = operatorName, Province = dto.Province,
+            DistributionDate = distributionDate,
+            DistributionDateDisplay = dto.DistributionDateDisplay, Operator = operatorName, Province = dto.Province,
         });
 
         if (!hasSupplier && fromId.HasValue)
@@ -168,6 +211,48 @@ public class DistributionService : IDistributionService
             else if (dto.Quantity > 0)
                 _db.Inventories.Add(new Inventory { DrugId = dto.DrugId, BatchNo = dto.BatchNo, Quantity = dto.Quantity, CustomerId = toId });
         }
+
+        return new DistributionImportResultDto { Imported = 1 };
+    }
+
+    private static DateTime ParseDistributionDate(DownstreamRecordDto dto)
+        => DateTime.TryParse(dto.DistributionDateDisplay ?? dto.DistributionDate.ToString("yyyy-MM-dd"), out var date)
+            ? date
+            : DateTime.Now;
+
+    private static string BuildDistributionKey(DistributionRecord r)
+        => BuildDistributionKey(r.DrugId, r.BatchNo, r.SupplierId, r.FromCustomerId, r.ToCustomerId, r.Quantity, r.DeliveryOrderNo, r.DistributionDate);
+
+    private static string BuildDistributionKey(
+        Guid drugId,
+        string? batchNo,
+        Guid? supplierId,
+        Guid? fromCustomerId,
+        Guid? toCustomerId,
+        decimal quantity,
+        string? deliveryOrderNo,
+        DateTime distributionDate)
+        => MasterDataMatchHelper.DistributionRecordKey(
+            drugId,
+            batchNo,
+            supplierId,
+            fromCustomerId,
+            toCustomerId,
+            quantity,
+            deliveryOrderNo,
+            distributionDate);
+
+    private static bool SupplementDistributionRecord(DistributionRecord target, DownstreamRecordDto source, DateTime distributionDate)
+    {
+        var changed = false;
+        if (string.IsNullOrWhiteSpace(target.SalesPerson) && !string.IsNullOrWhiteSpace(source.SalesPerson)) { target.SalesPerson = source.SalesPerson; changed = true; }
+        if (string.IsNullOrWhiteSpace(target.DeliveryOrderNo) && !string.IsNullOrWhiteSpace(source.DeliveryOrderNo)) { target.DeliveryOrderNo = source.DeliveryOrderNo; changed = true; }
+        if (string.IsNullOrWhiteSpace(target.Province) && !string.IsNullOrWhiteSpace(source.Province)) { target.Province = source.Province; changed = true; }
+        if (string.IsNullOrWhiteSpace(target.DistributionDateDisplay) && !string.IsNullOrWhiteSpace(source.DistributionDateDisplay)) { target.DistributionDateDisplay = source.DistributionDateDisplay; changed = true; }
+        if (target.TaxedUnitPrice == 0 && source.TaxedUnitPrice != 0) { target.TaxedUnitPrice = source.TaxedUnitPrice; changed = true; }
+        if (target.DistributionDate == default) { target.DistributionDate = distributionDate; changed = true; }
+        if (changed) target.UpdatedAt = DateTime.UtcNow;
+        return changed;
     }
 
     public async Task<IReadOnlyList<DropdownItem>> GetCustomerDropdownAsync()

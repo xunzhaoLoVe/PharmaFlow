@@ -25,6 +25,7 @@ public class AppDbContext : DbContext
     public DbSet<CollectionSource> CollectionSources => Set<CollectionSource>();
     public DbSet<CollectionTask> CollectionTasks => Set<CollectionTask>();
     public DbSet<CollectionRecord> CollectionRecords => Set<CollectionRecord>();
+    public DbSet<CollectionSyncEntity> CollectionSyncEntities => Set<CollectionSyncEntity>();
     public DbSet<ImportRule> ImportRules => Set<ImportRule>();
     public DbSet<ModuleRuleConfig> ModuleRuleConfigs => Set<ModuleRuleConfig>();
 

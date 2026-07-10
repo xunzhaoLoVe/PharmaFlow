@@ -67,6 +67,7 @@ export default function PurchaseListPage() {
       salesPerson: values.salesPerson || '',
       deliveryOrderNo: values.deliveryOrderNo || '',
       distributionDate: values.distributionDate ? dayjs(values.distributionDate).format('YYYY-MM-DD') : '',
+      province: values.province || '',
     });
     message.success('出货记录已保存'); setModalOpen(false); load();
   };
@@ -93,6 +94,7 @@ export default function PurchaseListPage() {
       const salesCol = findCol(['业务员','销售员']);
       const deliveryCol = findCol(['发货单号','出货单号']);
       const dateCol = findCol(['出货日期','日期']);
+      const provinceCol = findCol(['省份','省','区域']);
 
       if (!drugCol) { message.error('未找到"药品名称"列'); return; }
       if (!custCol) { message.error('未找到"采购经销商"列'); return; }
@@ -124,11 +126,13 @@ export default function PurchaseListPage() {
           salesPerson: salesCol ? (row[salesCol] || '').trim() : '',
           deliveryOrderNo: deliveryCol ? (row[deliveryCol] || '').trim() : '',
           distributionDate: dateCol ? (row[dateCol] || '').trim() : dayjs().format('YYYY-MM-DD'),
+          province: provinceCol ? (row[provinceCol] || '').trim() : '',
         });
       }
         if (dtos.length === 0) { message.warning(`无有效数据，跳过 ${skipped} 条`); return; }
-        await apiClient.post('/distribution/downstream/batch', dtos);
-        message.success(`导入完成: ${dtos.length} 条` + (skipped > 0 ? `, 跳过 ${skipped} 条` : '')); load();
+        const res = await apiClient.post('/distribution/downstream/batch', dtos);
+        const result = (res as any).data || { imported: dtos.length, skipped: 0, supplemented: 0 };
+        message.success(`导入完成: 新增 ${result.imported || 0} 条，跳过重复 ${result.skipped || 0} 条` + (skipped > 0 ? `，跳过无效 ${skipped} 条` : '')); load();
       } catch (ex: any) {
         message.destroy();
         message.error('Excel 解析失败: ' + (ex?.message || '未知错误'));
@@ -169,6 +173,7 @@ export default function PurchaseListPage() {
       render: (v: string) => v ? v.substring(0, 10) : '-',
     },
     { title: '采购经销商', dataIndex: 'toCustomerName', width: 180, sorter: textSorter<DistributionRecordDto>(r => r.toCustomerName) },
+    { title: '省份', dataIndex: 'province', width: 80, sorter: textSorter<DistributionRecordDto>(r => r.province) },
     { title: '操作', width: 64, render: (_, r) => (
         <RowActions actions={[
           { key: 'delete', label: '删除', icon: <DeleteOutlined />, tone: 'danger', confirmTitle: '确定删除？', onClick: () => handleDelete(r.id) },
@@ -181,6 +186,7 @@ export default function PurchaseListPage() {
     { key: 'batchNo', label: '批号', getValue: r => r.batchNo },
     { key: 'salesPerson', label: '业务员', getValue: r => r.salesPerson },
     { key: 'toCustomerName', label: '采购经销商', getValue: r => r.toCustomerName },
+    { key: 'province', label: '省份', getValue: r => r.province },
   ];
   const tableData = applyTableFilters(filtered, filterFields, tableFilters);
   const drugOptions = drugs.map(d => {
@@ -230,6 +236,7 @@ export default function PurchaseListPage() {
           <Form.Item name="customerId" label="采购经销商（一级经销商）" rules={[{ required: true }]}>
             <Select showSearch placeholder="选择一级经销商" filterOption={(v, o) => (o?.label as string || '').includes(v)}
               options={customers.map(c => ({ label: c.name, value: c.id }))} /></Form.Item>
+          <Form.Item name="province" label="省份"><Input placeholder="如 江苏" /></Form.Item>
           <Form.Item name="quantity" label="数量（负数表示退货）" rules={[{ required: true }]}><Input placeholder="如 10 或 -5" /></Form.Item>
           <Form.Item name="taxedUnitPrice" label="含税单价"><Input placeholder="0.00" /></Form.Item>
           <Form.Item name="salesPerson" label="业务员"><Input /></Form.Item>

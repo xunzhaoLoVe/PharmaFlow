@@ -252,7 +252,7 @@ export default function ReportPage() {
   ];
 
   const terminalColumns: ColumnsType<EndCustomerSale> = [
-    { title: '终端客户', dataIndex: 'customerName', ellipsis: true },
+    { title: '终端机构', dataIndex: 'customerName', ellipsis: true },
     { title: '省份', dataIndex: 'province', width: 90, render: v => v || '-' },
     { title: '药品名称', dataIndex: 'drugName', ellipsis: true },
     { title: '规格', dataIndex: 'specification', width: 130, ellipsis: true },
@@ -389,7 +389,7 @@ export default function ReportPage() {
         />
       </Panel>
 
-      <Panel title="终端客户销售明细">
+      <Panel title="终端机构销售明细">
         <Table
           rowKey={(r, i) => `${r.customerName}-${r.drugName}-${r.specification}-${i}`}
           columns={terminalColumns}

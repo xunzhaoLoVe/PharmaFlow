@@ -14,6 +14,7 @@ public class CollectionService : ICollectionService
     private readonly CollectionExecutionService _executionService;
     private readonly SmartDataCleaner _smartDataCleaner;
     private readonly ILogger<CollectionService> _logger;
+    private const string SummarySyncOperator = "采集汇总同步";
     private static readonly (string FullName, string[] Aliases)[] ProvinceAliases =
     {
         ("北京市", new[] { "北京" }),
@@ -430,7 +431,7 @@ public class CollectionService : ICollectionService
 
     public async Task<SyncSummaryResultDto> SyncSummaryAsync(Guid? sourceId = null)
     {
-        await RemoveBusinessDataForSubmittedRecordsAsync(sourceId: sourceId);
+        await RemoveBusinessDataForSubmittedRecordsAsync(sourceId: sourceId, removeCreatedMasterData: false);
         await _db.SaveChangesAsync();
         return await SyncSubmittedRecordsAsync(sourceId: sourceId);
     }
@@ -499,7 +500,10 @@ public class CollectionService : ICollectionService
                 var specification = GetString(root, "Specification");
                 var drug = FindOrCreateDrug(root, drugName, specification, drugs, drugCodes, result);
                 if (_db.Entry(drug).State == EntityState.Detached)
+                {
                     _db.Drugs.Add(drug);
+                    RecordCreatedEntity(record, "Drug", drug.Id);
+                }
 
                 var dataType = FirstNonEmpty(GetString(root, "DataType"), GetSourceType(record.Source?.TransformConfig));
                 var isPurchaseFlow = IsPurchaseFlow(dataType);
@@ -520,13 +524,19 @@ public class CollectionService : ICollectionService
                 {
                     supplier = FindOrCreateSupplier(root, FirstNonEmpty(fromName, "江苏神龙药业有限公司"), suppliers, supplierCodes);
                     if (_db.Entry(supplier).State == EntityState.Detached)
+                    {
                         _db.Suppliers.Add(supplier);
+                        RecordCreatedEntity(record, "Supplier", supplier.Id);
+                    }
                 }
                 else if (!string.IsNullOrWhiteSpace(fromName))
                 {
                     fromCustomer = FindOrCreateSourceDealer(root, fromName, null, customers, customerCodes, result);
                     if (_db.Entry(fromCustomer).State == EntityState.Detached)
+                    {
                         _db.Customers.Add(fromCustomer);
+                        RecordCreatedEntity(record, "Customer", fromCustomer.Id);
+                    }
                 }
                 if (!string.IsNullOrWhiteSpace(toName))
                 {
@@ -534,7 +544,10 @@ public class CollectionService : ICollectionService
                         ? FindOrCreatePurchaseDealer(root, toName, GetString(root, "CustomerCode"), customers, customerCodes, result)
                         : FindOrCreateDestinationCustomer(root, toName, GetString(root, "CustomerCode"), customers, customerCodes, result);
                     if (_db.Entry(toCustomer).State == EntityState.Detached)
+                    {
                         _db.Customers.Add(toCustomer);
+                        RecordCreatedEntity(record, "Customer", toCustomer.Id);
+                    }
                 }
 
                 if ((!isPurchaseFlow && fromCustomer == null) || toCustomer == null || (isPurchaseFlow && supplier == null))
@@ -578,7 +591,7 @@ public class CollectionService : ICollectionService
                     TaxedUnitPrice = GetDecimal(root, "TaxedUnitPrice"),
                     DistributionDate = distributionDate,
                     DistributionDateDisplay = FormatDateOnly(distributionDate),
-                    Operator = "采集汇总同步",
+                    Operator = SummarySyncOperator,
                     Province = GetProvince(root),
                 };
                 _db.DistributionRecords.Add(distributionRecord);
@@ -598,11 +611,23 @@ public class CollectionService : ICollectionService
         return result;
     }
 
-    private async Task RemoveBusinessDataForSubmittedRecordsAsync(Guid? sourceId = null, Guid? taskId = null)
+    private void RecordCreatedEntity(CollectionRecord record, string entityType, Guid entityId)
+    {
+        _db.CollectionSyncEntities.Add(new CollectionSyncEntity
+        {
+            EntityType = entityType,
+            EntityId = entityId,
+            SourceId = record.SourceId,
+            TaskId = record.TaskId,
+        });
+    }
+
+    private async Task RemoveBusinessDataForSubmittedRecordsAsync(Guid? sourceId = null, Guid? taskId = null, bool removeCreatedMasterData = true)
     {
         var query = _db.CollectionRecords
             .Include(r => r.Task)
-            .Where(r => r.Task.IsSubmitted && r.TargetEntityType == "DistributionRecord" && r.TargetEntityId.HasValue)
+            .Include(r => r.Source)
+            .Where(r => r.Task.IsSubmitted)
             .AsQueryable();
 
         if (sourceId.HasValue)
@@ -615,18 +640,189 @@ public class CollectionService : ICollectionService
             return;
 
         var distributionIds = records
+            .Where(r => r.TargetEntityType == "DistributionRecord" && r.TargetEntityId.HasValue)
             .Select(r => r.TargetEntityId!.Value)
             .Distinct()
             .ToList();
+
+        var fallbackDistributionIds = await FindSyncedDistributionIdsForCollectionRecordsAsync(records);
+        distributionIds = distributionIds
+            .Concat(fallbackDistributionIds)
+            .Distinct()
+            .ToList();
+
+        var removedIds = distributionIds.ToHashSet();
         var distributions = await _db.DistributionRecords
-            .Where(d => distributionIds.Contains(d.Id))
+            .Where(d => removedIds.Contains(d.Id) && d.Operator == SummarySyncOperator)
             .ToListAsync();
 
         _db.DistributionRecords.RemoveRange(distributions);
         foreach (var record in records)
         {
-            record.TargetEntityId = null;
-            record.UpdatedAt = DateTime.UtcNow;
+            if (record.TargetEntityType == "DistributionRecord")
+            {
+                record.TargetEntityId = null;
+                record.UpdatedAt = DateTime.UtcNow;
+            }
+        }
+
+        if (removeCreatedMasterData)
+            await RemoveCreatedMasterDataAsync(sourceId, taskId, removedIds);
+    }
+
+    /// <summary>
+    /// 联动清理本次采集同步「新建」的主数据（药品/客户/供应商）。
+    /// 仅当该主数据已无任何流向记录（含其它采集源、手动录入）引用时才软删除，
+    /// 避免误删用户已有的主数据或其它采集源仍在使用的主数据。
+    /// </summary>
+    private async Task RemoveCreatedMasterDataAsync(Guid? sourceId, Guid? taskId, HashSet<Guid> removedDistributionIds)
+    {
+        var syncEntityQuery = _db.CollectionSyncEntities.AsQueryable();
+        if (taskId.HasValue)
+            syncEntityQuery = syncEntityQuery.Where(e => e.TaskId == taskId.Value);
+        else if (sourceId.HasValue)
+            syncEntityQuery = syncEntityQuery.Where(e => e.SourceId == sourceId.Value);
+
+        var syncEntities = await syncEntityQuery.ToListAsync();
+        if (syncEntities.Count == 0)
+            return;
+
+        foreach (var se in syncEntities)
+        {
+            var referenced = se.EntityType switch
+            {
+                "Drug" => await _db.DistributionRecords
+                    .AnyAsync(d => d.DrugId == se.EntityId && !removedDistributionIds.Contains(d.Id)),
+                "Supplier" => await _db.DistributionRecords
+                    .AnyAsync(d => d.SupplierId == se.EntityId && !removedDistributionIds.Contains(d.Id)),
+                "Customer" => await _db.DistributionRecords
+                    .AnyAsync(d => (d.FromCustomerId == se.EntityId || d.ToCustomerId == se.EntityId)
+                        && !removedDistributionIds.Contains(d.Id)),
+                _ => true,
+            };
+
+            if (referenced)
+                continue;
+
+            switch (se.EntityType)
+            {
+                case "Drug":
+                    var drug = await _db.Drugs.IgnoreQueryFilters().FirstOrDefaultAsync(d => d.Id == se.EntityId);
+                    if (drug != null && !drug.IsDeleted) { drug.IsDeleted = true; drug.UpdatedAt = DateTime.UtcNow; }
+                    break;
+                case "Customer":
+                    var customer = await _db.Customers.IgnoreQueryFilters().FirstOrDefaultAsync(c => c.Id == se.EntityId);
+                    if (customer != null && !customer.IsDeleted) { customer.IsDeleted = true; customer.UpdatedAt = DateTime.UtcNow; }
+                    break;
+                case "Supplier":
+                    var supplier = await _db.Suppliers.IgnoreQueryFilters().FirstOrDefaultAsync(s => s.Id == se.EntityId);
+                    if (supplier != null && !supplier.IsDeleted) { supplier.IsDeleted = true; supplier.UpdatedAt = DateTime.UtcNow; }
+                    break;
+            }
+        }
+
+        _db.CollectionSyncEntities.RemoveRange(syncEntities);
+    }
+
+    private async Task<List<Guid>> FindSyncedDistributionIdsForCollectionRecordsAsync(List<CollectionRecord> records)
+    {
+        var drugs = await _db.Drugs.Where(d => !d.IsDeleted).ToListAsync();
+        var customers = await _db.Customers.Where(c => !c.IsDeleted).ToListAsync();
+        var suppliers = await _db.Suppliers.Where(s => !s.IsDeleted).ToListAsync();
+
+        var syncedDistributions = await _db.DistributionRecords
+            .Where(d => d.Operator == SummarySyncOperator)
+            .Select(d => new
+            {
+                d.Id,
+                d.DrugId,
+                d.BatchNo,
+                d.SupplierId,
+                d.FromCustomerId,
+                d.ToCustomerId,
+                d.Quantity,
+                d.DeliveryOrderNo,
+                d.DistributionDate
+            })
+            .ToListAsync();
+
+        var distributionByKey = syncedDistributions
+            .GroupBy(d => DistributionSyncKey(d.DrugId, d.BatchNo, d.SupplierId, d.FromCustomerId, d.ToCustomerId, d.Quantity, d.DeliveryOrderNo, d.DistributionDate), StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(g => g.Key, g => g.First().Id, StringComparer.OrdinalIgnoreCase);
+
+        var ids = new List<Guid>();
+        foreach (var record in records)
+        {
+            var key = TryBuildDistributionSyncKey(record, drugs, customers, suppliers);
+            if (key != null && distributionByKey.TryGetValue(key, out var distributionId))
+                ids.Add(distributionId);
+        }
+
+        return ids;
+    }
+
+    private static string? TryBuildDistributionSyncKey(
+        CollectionRecord record,
+        List<Drug> drugs,
+        List<Customer> customers,
+        List<Supplier> suppliers)
+    {
+        if (string.IsNullOrWhiteSpace(record.CleanedDataJson))
+            return null;
+
+        try
+        {
+            using var doc = JsonDocument.Parse(record.CleanedDataJson);
+            var root = doc.RootElement;
+            var drugName = GetString(root, "DrugName");
+            if (string.IsNullOrWhiteSpace(drugName))
+                return null;
+
+            var specification = GetString(root, "Specification");
+            var drug = FindExistingDrug(root, drugName, specification, drugs);
+            if (drug == null)
+                return null;
+
+            var dataType = FirstNonEmpty(GetString(root, "DataType"), GetSourceType(record.Source?.TransformConfig));
+            var isPurchaseFlow = IsPurchaseFlow(dataType);
+            var fromName = FirstNonEmpty(
+                GetString(root, "FromCustomerName"),
+                GetString(root, "CompanyName"),
+                GetString(root, "SupplierShortName"),
+                GetString(root, "OriginalSupplierShortName"));
+            var toName = FirstNonEmpty(
+                GetString(root, "ToCustomerName"),
+                GetString(root, "CustomerName"),
+                GetString(root, "CustomerShortName"));
+
+            Supplier? supplier = null;
+            Customer? fromCustomer = null;
+            if (isPurchaseFlow)
+                supplier = FindExistingSupplier(root, FirstNonEmpty(fromName, "江苏神龙药业有限公司"), suppliers);
+            else if (!string.IsNullOrWhiteSpace(fromName))
+                fromCustomer = FindUniqueCustomerByName(customers.Where(c => c.CustomerType == CustomerType.商业), fromName);
+
+            var toCustomer = !string.IsNullOrWhiteSpace(toName)
+                ? FindExistingCustomer(toName, GetString(root, "CustomerCode"), customers, preferDealer: isPurchaseFlow)
+                : null;
+
+            if ((!isPurchaseFlow && fromCustomer == null) || toCustomer == null || (isPurchaseFlow && supplier == null))
+                return null;
+
+            var batchNo = FirstNonEmpty(GetString(root, "BatchNo"), "-");
+            var quantity = isPurchaseFlow
+                ? FirstNonZero(GetDecimal(root, "PurchaseQuantity"), GetDecimal(root, "Quantity"), GetDecimal(root, "SalesQuantity"))
+                : FirstNonZero(GetDecimal(root, "SalesQuantity"), GetDecimal(root, "Quantity"), GetDecimal(root, "PurchaseQuantity"));
+            if (quantity == 0)
+                return null;
+
+            var distributionDate = GetDateTime(root, "DistributionDate") ?? DateTime.UtcNow;
+            var deliveryOrderNo = GetString(root, "DeliveryOrderNo");
+            return DistributionSyncKey(drug.Id, batchNo, supplier?.Id, fromCustomer?.Id, toCustomer.Id, quantity, deliveryOrderNo, distributionDate);
+        }
+        catch
+        {
+            return null;
         }
     }
 
@@ -646,7 +842,7 @@ public class CollectionService : ICollectionService
         await ReapplyTransformForRecordsAsync(task.Source, records);
         task.IsSubmitted = true;
         await _db.SaveChangesAsync();
-        await RemoveBusinessDataForSubmittedRecordsAsync(taskId: id);
+        await RemoveBusinessDataForSubmittedRecordsAsync(taskId: id, removeCreatedMasterData: false);
         await _db.SaveChangesAsync();
         await SyncSubmittedRecordsAsync(taskId: id);
     }
@@ -678,7 +874,7 @@ public class CollectionService : ICollectionService
         await _db.SaveChangesAsync();
         if (await _db.CollectionTasks.AnyAsync(t => t.SourceId == sourceId && t.IsSubmitted))
         {
-            await RemoveBusinessDataForSubmittedRecordsAsync(sourceId: sourceId);
+            await RemoveBusinessDataForSubmittedRecordsAsync(sourceId: sourceId, removeCreatedMasterData: false);
             await _db.SaveChangesAsync();
             await SyncSubmittedRecordsAsync(sourceId: sourceId);
         }
@@ -1144,15 +1340,15 @@ public class CollectionService : ICollectionService
         decimal quantity,
         string? deliveryOrderNo,
         DateTime distributionDate)
-        => string.Join("|",
+        => MasterDataMatchHelper.DistributionRecordKey(
             drugId,
-            batchNo.Trim(),
-            supplierId?.ToString() ?? "",
-            fromCustomerId?.ToString() ?? "",
-            toCustomerId?.ToString() ?? "",
-            quantity.ToString("0.####"),
-            deliveryOrderNo?.Trim() ?? "",
-            distributionDate.ToString("yyyy-MM-dd HH:mm:ss"));
+            batchNo,
+            supplierId,
+            fromCustomerId,
+            toCustomerId,
+            quantity,
+            deliveryOrderNo,
+            distributionDate);
 
     private static Drug FindOrCreateDrug(
         JsonElement root,
@@ -1209,14 +1405,32 @@ public class CollectionService : ICollectionService
         return drug;
     }
 
+    private static Drug? FindExistingDrug(JsonElement root, string drugName, string specification, List<Drug> drugs)
+    {
+        var drugCode = GetString(root, "DrugCode");
+        var drug = drugs.FirstOrDefault(d => SameDrugIdentity(d, drugName, specification));
+
+        if (drug == null && string.IsNullOrWhiteSpace(specification))
+        {
+            drug = !string.IsNullOrWhiteSpace(drugCode)
+                ? drugs.FirstOrDefault(d =>
+                    d.Code.Equals(drugCode, StringComparison.OrdinalIgnoreCase)
+                    && SameText(d.Name, drugName))
+                : null;
+            drug ??= drugs.FirstOrDefault(d => SameText(d.Name, drugName) && string.IsNullOrWhiteSpace(d.Specification));
+        }
+
+        return drug;
+    }
+
     private static bool SameDrugIdentity(Drug drug, string name, string specification)
-        => SameText(drug.Name, name) && SameText(drug.Specification, specification);
+        => MasterDataMatchHelper.DrugKey(drug.Name, drug.Specification) == MasterDataMatchHelper.DrugKey(name, specification);
 
     private static bool SameText(string? left, string? right)
-        => string.Equals(NormalizeLookupText(left), NormalizeLookupText(right), StringComparison.OrdinalIgnoreCase);
+        => MasterDataMatchHelper.SameText(left, right);
 
     private static string NormalizeLookupText(string? value)
-        => string.Concat((value ?? "").Where(c => !char.IsWhiteSpace(c)));
+        => MasterDataMatchHelper.NormalizeText(value);
 
     private static Customer FindOrCreateSourceDealer(
         JsonElement root,
@@ -1234,7 +1448,19 @@ public class CollectionService : ICollectionService
         List<Customer> customers,
         HashSet<string> usedCodes,
         SyncSummaryResultDto result)
-        => FindOrCreateCustomer(root, name, preferredCode, customers, usedCodes, result, CustomerType.医院, preferDealer: true, convertExistingToTargetType: false);
+    {
+        var customerType = ResolveDestinationCustomerType(root, name);
+        return FindOrCreateCustomer(
+            root,
+            name,
+            preferredCode,
+            customers,
+            usedCodes,
+            result,
+            customerType,
+            preferDealer: customerType == CustomerType.商业,
+            convertExistingToTargetType: false);
+    }
 
     private static Customer FindOrCreatePurchaseDealer(
         JsonElement root,
@@ -1244,6 +1470,127 @@ public class CollectionService : ICollectionService
         HashSet<string> usedCodes,
         SyncSummaryResultDto result)
         => FindOrCreateCustomer(root, name, preferredCode, customers, usedCodes, result, CustomerType.商业, preferDealer: true, convertExistingToTargetType: true);
+
+    private static Customer? FindCustomerByBusinessKey(
+        IEnumerable<Customer> customers,
+        string name,
+        string? drugName,
+        string? province,
+        CustomerType customerType,
+        DistributorRole? distributorRole,
+        DistributorLevel? level)
+    {
+        var key = customerType == CustomerType.商业
+            ? MasterDataMatchHelper.DealerCustomerKey(name, drugName, province, distributorRole, level)
+            : MasterDataMatchHelper.EndCustomerKey(name, drugName, province, customerType);
+
+        return customers.FirstOrDefault(c => customerType == CustomerType.商业
+            ? MasterDataMatchHelper.DealerCustomerKey(c.Name, c.DrugName, c.Province, c.DistributorRole, c.Level) == key
+            : MasterDataMatchHelper.EndCustomerKey(c.Name, c.DrugName, c.Province, c.CustomerType) == key);
+    }
+
+    private static Customer? FindUniqueCustomerByName(IEnumerable<Customer> customers, string name)
+    {
+        var matches = customers.Where(c => SameText(c.Name, name)).Take(2).ToList();
+        return matches.Count == 1 ? matches[0] : null;
+    }
+
+    private static CustomerType ResolveDestinationCustomerType(JsonElement root, string name)
+    {
+        var explicitType = ResolveCustomerTypeFromText(FirstNonEmpty(
+            GetString(root, "ToCustomerType"),
+            GetString(root, "DestinationCustomerType"),
+            GetString(root, "CustomerTypeName"),
+            GetString(root, "CustomerType"),
+            GetString(root, "InstitutionType"),
+            GetString(root, "OrganizationType"),
+            GetString(root, "机构类型"),
+            GetString(root, "客户类型"),
+            GetString(root, "终端类型")));
+        if (explicitType.HasValue)
+            return explicitType.Value;
+
+        var distributorLevel = ResolveDistributorLevel(root, CustomerType.商业);
+        var distributorRole = ResolveDistributorRole(root, CustomerType.商业);
+        if (distributorLevel.HasValue || IsDealerRoleSignal(distributorRole))
+            return CustomerType.商业;
+
+        return InferCustomerTypeByName(name) ?? CustomerType.其他;
+    }
+
+    private static CustomerType? ResolveCustomerTypeFromText(string? value)
+    {
+        var text = NormalizeLookupText(value);
+        if (string.IsNullOrWhiteSpace(text))
+            return null;
+
+        if (Enum.TryParse<CustomerType>(text, out var parsed))
+            return parsed;
+
+        if (ContainsAny(text, "医院", "医疗中心", "医学院附属", "卫生院", "卫生室", "卫生服务中心", "卫生服务站", "社区卫生", "基层医疗", "药店", "药房", "大药房", "诊所", "门诊"))
+            return InferCustomerTypeByName(text) ?? CustomerType.其他;
+
+        if (ContainsAny(text, "商业", "经销", "配送", "批发", "代理商", "商业公司", "流通"))
+            return CustomerType.商业;
+
+        if (ContainsAny(text, "终端", "终端机构", "医疗机构"))
+            return null;
+
+        return null;
+    }
+
+    private static CustomerType? InferCustomerTypeByName(string? name)
+    {
+        var text = NormalizeLookupText(name);
+        if (string.IsNullOrWhiteSpace(text))
+            return null;
+
+        if (ContainsAny(text, "卫生院", "卫生室", "卫生服务中心", "卫生服务站", "社区卫生", "基层医疗"))
+            return CustomerType.基层医疗机构;
+        if (ContainsAny(text, "医院", "医疗中心", "医学院附属"))
+            return CustomerType.医院;
+        if (ContainsAny(text, "药店", "药房", "大药房", "连锁药"))
+            return CustomerType.药店;
+        if (ContainsAny(text, "诊所", "门诊"))
+            return CustomerType.诊所;
+        if (ContainsAny(text, "医药公司", "药业公司", "商业公司", "配送", "批发", "经销", "代理", "供应链", "流通", "物流", "有限公司", "集团"))
+            return CustomerType.商业;
+
+        return null;
+    }
+
+    private static bool IsDealerRoleSignal(DistributorRole? role)
+        => role is DistributorRole.商业公司 or DistributorRole.配送公司 or DistributorRole.代理商;
+
+    private static bool ContainsAny(string text, params string[] values)
+        => values.Any(v => text.Contains(v, StringComparison.OrdinalIgnoreCase));
+
+    private static DistributorRole? ResolveDistributorRole(JsonElement root, CustomerType customerType)
+    {
+        if (customerType != CustomerType.商业) return null;
+        var value = FirstNonEmpty(GetString(root, "DistributorRole"), GetString(root, "CustomerRole"), GetString(root, "Role"), GetString(root, "机构角色"));
+        return value switch
+        {
+            "商业公司" => DistributorRole.商业公司,
+            "配送公司" => DistributorRole.配送公司,
+            "代理商" => DistributorRole.代理商,
+            "其他" => DistributorRole.其他,
+            _ => Enum.TryParse<DistributorRole>(value, out var parsed) ? parsed : null,
+        };
+    }
+
+    private static DistributorLevel? ResolveDistributorLevel(JsonElement root, CustomerType customerType)
+    {
+        if (customerType != CustomerType.商业) return null;
+        var value = FirstNonEmpty(GetString(root, "DistributorLevel"), GetString(root, "CustomerLevel"), GetString(root, "Level"), GetString(root, "经销商级别"));
+        return value switch
+        {
+            "一级经销商" => DistributorLevel.一级经销商,
+            "二级经销商" => DistributorLevel.二级经销商,
+            "三级经销商" => DistributorLevel.三级经销商,
+            _ => Enum.TryParse<DistributorLevel>(value, out var parsed) ? parsed : null,
+        };
+    }
 
     private static Customer FindOrCreateCustomer(
         JsonElement root,
@@ -1257,32 +1604,36 @@ public class CollectionService : ICollectionService
         bool convertExistingToTargetType)
     {
         var code = preferredCode?.Trim() ?? "";
-        Customer? customer = null;
+        var province = GetProvince(root);
+        var drugName = GetString(root, "DrugName");
+        var distributorRole = ResolveDistributorRole(root, createType);
+        var distributorLevel = ResolveDistributorLevel(root, createType);
+        var customer = FindCustomerByBusinessKey(customers, name, drugName, province, createType, distributorRole, distributorLevel);
 
-        if (preferDealer)
+        if (customer == null && preferDealer)
         {
             customer = !string.IsNullOrWhiteSpace(code)
                 ? customers.FirstOrDefault(c => c.CustomerType == CustomerType.商业 && c.Code.Equals(code, StringComparison.OrdinalIgnoreCase))
                 : null;
-            customer ??= customers.FirstOrDefault(c => c.CustomerType == CustomerType.商业 && c.Name.Equals(name, StringComparison.OrdinalIgnoreCase));
+            customer ??= FindUniqueCustomerByName(customers.Where(c => c.CustomerType == CustomerType.商业), name);
         }
 
         customer ??= !string.IsNullOrWhiteSpace(code)
             ? customers.FirstOrDefault(c => c.Code.Equals(code, StringComparison.OrdinalIgnoreCase))
             : null;
-        customer ??= customers.FirstOrDefault(c => c.Name.Equals(name, StringComparison.OrdinalIgnoreCase));
+        customer ??= FindUniqueCustomerByName(customers, name);
 
         if (customer != null)
         {
             var changed = false;
             var shortName = GetString(root, "CustomerShortName");
-            var province = GetProvince(root);
             var salesPerson = GetString(root, "SalesPerson");
-            var drugName = GetString(root, "DrugName");
             if (string.IsNullOrWhiteSpace(customer.ShortName) && !string.IsNullOrWhiteSpace(shortName)) { customer.ShortName = shortName; changed = true; }
             if (!string.IsNullOrWhiteSpace(province) && !SameText(customer.Province, province)) { customer.Province = province; changed = true; }
             if (string.IsNullOrWhiteSpace(customer.SalesPerson) && !string.IsNullOrWhiteSpace(salesPerson)) { customer.SalesPerson = salesPerson; changed = true; }
             if (string.IsNullOrWhiteSpace(customer.DrugName) && !string.IsNullOrWhiteSpace(drugName)) { customer.DrugName = drugName; changed = true; }
+            if (customer.CustomerType == CustomerType.商业 && !customer.DistributorRole.HasValue && distributorRole.HasValue) { customer.DistributorRole = distributorRole; changed = true; }
+            if (customer.CustomerType == CustomerType.商业 && !customer.Level.HasValue && distributorLevel.HasValue) { customer.Level = distributorLevel; changed = true; }
             if (convertExistingToTargetType && customer.CustomerType != createType) { customer.CustomerType = createType; changed = true; }
             if (changed) customer.UpdatedAt = DateTime.UtcNow;
             return customer;
@@ -1300,11 +1651,38 @@ public class CollectionService : ICollectionService
             ShortName = GetString(root, "CustomerShortName"),
             Province = GetProvince(root),
             SalesPerson = GetString(root, "SalesPerson"),
-            DrugName = GetString(root, "DrugName"),
+            DrugName = drugName,
             CustomerType = createType,
+            DistributorRole = createType == CustomerType.商业 ? distributorRole : null,
+            Level = createType == CustomerType.商业 ? distributorLevel : null,
         };
         customers.Add(customer);
         result.CreatedCustomers++;
+        return customer;
+    }
+
+    private static Customer? FindExistingCustomer(
+        string name,
+        string? preferredCode,
+        List<Customer> customers,
+        bool preferDealer)
+    {
+        var code = preferredCode?.Trim() ?? "";
+        Customer? customer = null;
+
+        if (preferDealer)
+        {
+            customer = !string.IsNullOrWhiteSpace(code)
+                ? customers.FirstOrDefault(c => c.CustomerType == CustomerType.商业 && c.Code.Equals(code, StringComparison.OrdinalIgnoreCase))
+                : null;
+            customer ??= FindUniqueCustomerByName(customers.Where(c => c.CustomerType == CustomerType.商业), name);
+        }
+
+        customer ??= !string.IsNullOrWhiteSpace(code)
+            ? customers.FirstOrDefault(c => c.Code.Equals(code, StringComparison.OrdinalIgnoreCase))
+            : null;
+        customer ??= FindUniqueCustomerByName(customers, name);
+
         return customer;
     }
 
@@ -1348,6 +1726,17 @@ public class CollectionService : ICollectionService
             Address = GetString(root, "SupplierAddress", "Address"),
         };
         suppliers.Add(supplier);
+        return supplier;
+    }
+
+    private static Supplier? FindExistingSupplier(JsonElement root, string name, List<Supplier> suppliers)
+    {
+        var supplierName = FirstNonEmpty(name, "江苏神龙药业有限公司");
+        var code = FirstNonEmpty(GetString(root, "SupplierCode"), GetString(root, "OriginalSupplierCode"));
+        var supplier = !string.IsNullOrWhiteSpace(code)
+            ? suppliers.FirstOrDefault(s => s.Code.Equals(code, StringComparison.OrdinalIgnoreCase))
+            : null;
+        supplier ??= suppliers.FirstOrDefault(s => s.Name.Equals(supplierName, StringComparison.OrdinalIgnoreCase));
         return supplier;
     }
 

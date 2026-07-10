@@ -540,6 +540,27 @@ body,
   border-color: var(--pf-card-border);
 }
 
+.app-shell.is-dark-mode .dashboard-map-callout line {
+  stroke: rgba(56, 189, 248, 0.45);
+}
+
+.app-shell.is-dark-mode .dashboard-map-callout rect {
+  fill: rgba(15, 23, 42, 0.9);
+  stroke: rgba(71, 85, 105, 0.92);
+}
+
+.app-shell.is-dark-mode .dashboard-map-callout text {
+  fill: #e5e7eb;
+}
+
+.app-shell.is-dark-mode .dashboard-map-callout text tspan + tspan {
+  fill: #67e8f9;
+}
+
+.app-shell.is-dark-mode .dashboard-map-label {
+  stroke: rgba(15, 23, 42, 0.9);
+}
+
 .app-shell.is-dark-mode .dashboard-insight-item,
 .app-shell.is-dark-mode .dashboard-stat-footer {
   border-color: var(--pf-card-border);
@@ -1169,14 +1190,46 @@ body,
   pointer-events: none;
 }
 
+.dashboard-map-callouts {
+  pointer-events: none;
+}
+
+.dashboard-map-callout line {
+  stroke: rgba(37, 99, 235, 0.42);
+  stroke-width: 1.15;
+  stroke-dasharray: 4 4;
+  vector-effect: non-scaling-stroke;
+}
+
+.dashboard-map-callout rect {
+  fill: rgba(255, 255, 255, 0.93);
+  stroke: rgba(148, 163, 184, 0.72);
+  stroke-width: 1;
+  filter: drop-shadow(0 8px 14px rgba(15, 23, 42, 0.1));
+}
+
+.dashboard-map-callout text {
+  fill: var(--pf-text);
+  font-size: 11px;
+  font-weight: 800;
+  text-anchor: middle;
+  dominant-baseline: hanging;
+}
+
+.dashboard-map-callout text tspan + tspan {
+  fill: #0f766e;
+  font-size: 10px;
+  font-weight: 700;
+}
+
 .dashboard-map-label {
   fill: var(--pf-text);
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 800;
   paint-order: stroke;
   stroke: #ffffff;
   stroke-linejoin: round;
-  stroke-width: 4px;
+  stroke-width: 3.5px;
   text-anchor: middle;
   dominant-baseline: middle;
 }

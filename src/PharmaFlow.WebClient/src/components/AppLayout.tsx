@@ -23,7 +23,7 @@ const ALL_MENU_ITEMS = [
     perm: 'customers',
     children: [
       { key: '/customers/distributors', icon: <ApartmentOutlined />, label: '经销商', perm: 'customers' },
-      { key: '/customers/end', icon: <UserSwitchOutlined />, label: '终端客户', perm: 'customers' },
+      { key: '/customers/end', icon: <UserSwitchOutlined />, label: '终端机构', perm: 'customers' },
     ],
   },
   { key: '/purchases', icon: <ShoppingCartOutlined />, label: '采购管理', perm: 'purchases' },
@@ -50,7 +50,7 @@ const PAGE_DESCRIPTIONS: Record<string, string> = {
   '/dashboard': '客户、药品与库存预警概览',
   '/drugs': '维护药品基础资料与规格信息',
   '/customers/distributors': '经销商客户档案与级别管理',
-  '/customers/end': '终端客户档案与类型管理',
+  '/customers/end': '终端机构档案与类型管理',
   '/purchases': '本司出货至一级经销商记录',
   '/sales': '下游流转销售记录管理',
   '/inventory': '经销商库存与低库存预警',

@@ -129,10 +129,15 @@ export default function SalesListPage() {
         }
         if (dtos.length === 0) { message.warning(`无有效数据，跳过 ${skipped} 条`); return; }
         const BATCH = 500;
+        let imported = 0, duplicateSkipped = 0, supplemented = 0;
         for (let i = 0; i < dtos.length; i += BATCH) {
-          await apiClient.post('/distribution/downstream/batch', dtos.slice(i, i + BATCH));
+          const res = await apiClient.post('/distribution/downstream/batch', dtos.slice(i, i + BATCH));
+          const result = (res as any).data || { imported: 0, skipped: 0, supplemented: 0 };
+          imported += result.imported || 0;
+          duplicateSkipped += result.skipped || 0;
+          supplemented += result.supplemented || 0;
         }
-        message.success(`导入完成: ${dtos.length} 条` + (skipped > 0 ? `, 跳过 ${skipped} 条` : '')); load();
+        message.success(`导入完成: 新增 ${imported} 条，跳过重复 ${duplicateSkipped} 条` + (skipped > 0 ? `，跳过无效 ${skipped} 条` : '') + (supplemented > 0 ? `，补充 ${supplemented} 条` : '')); load();
       } catch (err: any) { message.destroy(); message.error('导入失败: ' + (err?.message || '未知错误')); }
     };
     reader.onerror = () => { message.destroy(); message.error('文件读取失败'); };

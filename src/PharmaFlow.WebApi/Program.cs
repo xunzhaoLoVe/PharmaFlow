@@ -99,6 +99,105 @@ using (var scope = app.Services.CreateScope())
     }
     catch { /* ignore */ }
     finally { db.Database.GetDbConnection().Close(); }
+
+    // 采集同步追踪表：EnsureCreated 不会为已存在的数据库创建新表，需按数据库类型手动建表
+    try
+    {
+        var conn = db.Database.GetDbConnection();
+        if (conn.State != System.Data.ConnectionState.Open) conn.Open();
+        using var createCmd = conn.CreateCommand();
+        if (dbProvider == "PostgreSQL")
+        {
+            createCmd.CommandText = @"
+                CREATE TABLE IF NOT EXISTS ""CollectionSyncEntities"" (
+                    ""Id"" uuid NOT NULL,
+                    ""EntityType"" text NOT NULL,
+                    ""EntityId"" uuid NOT NULL,
+                    ""SourceId"" uuid NULL,
+                    ""TaskId"" uuid NULL,
+                    ""CreatedAt"" timestamptz NOT NULL,
+                    ""UpdatedAt"" timestamptz NULL,
+                    CONSTRAINT ""PK_CollectionSyncEntities"" PRIMARY KEY (""Id"")
+                );";
+            createCmd.ExecuteNonQuery();
+        }
+        else
+        {
+            createCmd.CommandText = @"
+                CREATE TABLE IF NOT EXISTS ""CollectionSyncEntities"" (
+                    ""Id"" TEXT NOT NULL,
+                    ""EntityType"" TEXT NOT NULL,
+                    ""EntityId"" TEXT NOT NULL,
+                    ""SourceId"" TEXT NULL,
+                    ""TaskId"" TEXT NULL,
+                    ""CreatedAt"" TEXT NOT NULL,
+                    ""UpdatedAt"" TEXT NULL,
+                    CONSTRAINT ""PK_CollectionSyncEntities"" PRIMARY KEY (""Id"")
+                );";
+            createCmd.ExecuteNonQuery();
+        }
+
+        foreach (var idx in new[]
+        {
+            @"CREATE INDEX IF NOT EXISTS ""IX_CSE_EntityType_EntityId"" ON ""CollectionSyncEntities"" (""EntityType"", ""EntityId"")",
+            @"CREATE INDEX IF NOT EXISTS ""IX_CSE_SourceId"" ON ""CollectionSyncEntities"" (""SourceId"")",
+            @"CREATE INDEX IF NOT EXISTS ""IX_CSE_TaskId"" ON ""CollectionSyncEntities"" (""TaskId"")",
+        })
+        {
+            createCmd.CommandText = idx;
+            createCmd.ExecuteNonQuery();
+        }
+        conn.Close();
+    }
+    catch { /* ignore */ }
+
+    // 经销商机构角色列：EnsureCreated 不会为已有 Customers 表自动补列
+    try
+    {
+        var conn = db.Database.GetDbConnection();
+        if (conn.State != System.Data.ConnectionState.Open) conn.Open();
+        using var roleCmd = conn.CreateCommand();
+        if (dbProvider == "PostgreSQL")
+        {
+            roleCmd.CommandText = @"ALTER TABLE ""Customers"" ADD COLUMN IF NOT EXISTS ""DistributorRole"" integer NULL";
+            roleCmd.ExecuteNonQuery();
+        }
+        else
+        {
+            roleCmd.CommandText = "SELECT COUNT(*) FROM pragma_table_info('Customers') WHERE name = 'DistributorRole'";
+            if ((long)roleCmd.ExecuteScalar()! == 0)
+            {
+                roleCmd.CommandText = "ALTER TABLE Customers ADD COLUMN DistributorRole INTEGER NULL";
+                roleCmd.ExecuteNonQuery();
+            }
+        }
+        conn.Close();
+    }
+    catch { /* ignore */ }
+
+    // 终端机构类型归并：卫生院/卫生服务中心/卫生室/卫生服务站 → 基层医疗机构，药房 → 药店，门诊 → 诊所，二级经销商 → 商业
+    try
+    {
+        var conn = db.Database.GetDbConnection();
+        if (conn.State != System.Data.ConnectionState.Open) conn.Open();
+        using var normalizeCmd = conn.CreateCommand();
+        var customerTypeColumn = dbProvider == "PostgreSQL" ? "\"CustomerType\"" : "CustomerType";
+        var customersTable = dbProvider == "PostgreSQL" ? "\"Customers\"" : "Customers";
+        foreach (var sql in new[]
+        {
+            $"UPDATE {customersTable} SET {customerTypeColumn} = 4 WHERE {customerTypeColumn} IN (6, 7, 10)",
+            $"UPDATE {customersTable} SET {customerTypeColumn} = 1 WHERE {customerTypeColumn} = 8",
+            $"UPDATE {customersTable} SET {customerTypeColumn} = 2 WHERE {customerTypeColumn} = 9",
+            $"UPDATE {customersTable} SET {customerTypeColumn} = 3 WHERE {customerTypeColumn} = 11",
+        })
+        {
+            normalizeCmd.CommandText = sql;
+            normalizeCmd.ExecuteNonQuery();
+        }
+        conn.Close();
+    }
+    catch { /* ignore */ }
+
     EnsureEssentialData(db);
 }
 

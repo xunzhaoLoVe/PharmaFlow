@@ -60,6 +60,8 @@ export interface CustomerDto {
   categoryId?: string;
   level?: number;
   levelName?: string;
+  distributorRole?: number;
+  distributorRoleName?: string;
 }
 
 // ── 供应商 ──
@@ -200,6 +202,12 @@ export interface DistributionRecordDto {
   operator?: string;
   province?: string;
   distributionDateDisplay?: string;
+}
+
+export interface DistributionImportResultDto {
+  imported: number;
+  skipped: number;
+  supplemented: number;
 }
 
 export interface DownstreamRecordDto {

@@ -1,13 +1,22 @@
 import { useMemo, useState } from 'react';
 import { Badge, Button, Popover, Select, Space } from 'antd';
 import { ClearOutlined, FilterOutlined } from '@ant-design/icons';
-import type { TableFilterField, TableFilterValues } from '../utils/tableFilters';
+import { EMPTY_FILTER_VALUE, normalizeTableFilterValue, type TableFilterField, type TableFilterValues } from '../utils/tableFilters';
 
 function buildOptions<T>(rows: T[], field: TableFilterField<T>) {
-  if (field.options) return field.options;
-  return Array.from(new Set(rows.map(row => String(field.getValue(row) ?? '')).filter(Boolean)))
+  const rowValues = rows.map(row => normalizeTableFilterValue(field.getValue(row)));
+  const hasEmpty = rowValues.some(value => value === '');
+  const baseOptions = field.options
+    ? field.options
+    : Array.from(new Set(rowValues.filter(Boolean)))
     .sort((a, b) => a.localeCompare(b, 'zh-Hans-CN', { numeric: true, sensitivity: 'base' }))
     .map(value => ({ label: value, value }));
+
+  if (!hasEmpty || baseOptions.some(option => option.value === EMPTY_FILTER_VALUE || option.value === '')) {
+    return baseOptions;
+  }
+
+  return [{ label: '空值', value: EMPTY_FILTER_VALUE }, ...baseOptions];
 }
 
 interface TableFiltersProps<T> {

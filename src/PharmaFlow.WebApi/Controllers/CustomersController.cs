@@ -95,11 +95,16 @@ public class CustomersController : ControllerBase
     }
 
     [HttpPost("import")]
-    public async Task<ActionResult<ApiResponse<int>>> ImportBatch(
+    public async Task<ActionResult<ApiResponse<CustomerImportResultDto>>> ImportBatch(
         [FromBody] List<CustomerDto> dtos, [FromQuery] bool isEndCustomer = false)
     {
         var result = await _customerService.ImportBatchAsync(dtos, isEndCustomer);
-        return Ok(ApiResponse<int>.Ok(result.imported, $"成功 {result.imported} 条, 跳过 {result.skipped} 条"));
+        return Ok(ApiResponse<CustomerImportResultDto>.Ok(new CustomerImportResultDto
+        {
+            Imported = result.imported,
+            Supplemented = result.supplemented,
+            Skipped = result.skipped,
+        }));
     }
 
     [HttpDelete("clear")]

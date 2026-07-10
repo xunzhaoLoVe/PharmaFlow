@@ -61,6 +61,7 @@ public class CustomerConfiguration : IEntityTypeConfiguration<Customer>
         builder.Property(e => e.Phone).HasMaxLength(50);
         builder.Property(e => e.Address).HasMaxLength(300);
         builder.Property(e => e.DrugName).HasMaxLength(200);
+        builder.Property(e => e.DistributorRole);
         builder.HasOne(e => e.Category).WithMany(e => e.Customers).HasForeignKey(e => e.CategoryId).OnDelete(DeleteBehavior.SetNull);
         builder.HasQueryFilter(e => !e.IsDeleted);
     }
@@ -297,5 +298,18 @@ public class CollectionRecordConfiguration : IEntityTypeConfiguration<Collection
             .HasForeignKey(e => e.SourceId).OnDelete(DeleteBehavior.Restrict);
         builder.HasOne(e => e.Reviewer).WithMany()
             .HasForeignKey(e => e.ReviewerId).OnDelete(DeleteBehavior.SetNull);
+    }
+}
+
+public class CollectionSyncEntityConfiguration : IEntityTypeConfiguration<CollectionSyncEntity>
+{
+    public void Configure(EntityTypeBuilder<CollectionSyncEntity> builder)
+    {
+        builder.ToTable("CollectionSyncEntities");
+        builder.HasKey(e => e.Id);
+        builder.Property(e => e.EntityType).HasMaxLength(20).IsRequired();
+        builder.HasIndex(e => new { e.EntityType, e.EntityId });
+        builder.HasIndex(e => e.SourceId);
+        builder.HasIndex(e => e.TaskId);
     }
 }
