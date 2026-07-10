@@ -29,9 +29,11 @@ export default function SalesListPage() {
   const [importBatches, setImportBatches] = useState<ImportBatchDto[]>([]);
   const [batchModalOpen, setBatchModalOpen] = useState(false);
   const [importStatusOpen, setImportStatusOpen] = useState(false);
+  const [importDetailOpen, setImportDetailOpen] = useState(false);
   const [importDetails, setImportDetails] = useState<DistributionImportDetailDto[]>([]);
   const [detailLoading, setDetailLoading] = useState(false);
-  const [selectedImportBatchId, setSelectedImportBatchId] = useState<string>();
+  const [detailStatus, setDetailStatus] = useState<string>();
+  const [detailBatchName, setDetailBatchName] = useState('');
   const [tableFilters, setTableFilters] = useState<TableFilterValues>({});
   const [dateRange, setDateRange] = useState<DateRangeValue>(null);
   const [form] = Form.useForm();
@@ -82,15 +84,20 @@ export default function SalesListPage() {
   const openImportStatusModal = async () => {
     await loadImportBatches();
     setImportStatusOpen(true);
+    setImportDetailOpen(false);
     setImportDetails([]);
-    setSelectedImportBatchId(undefined);
+    setDetailStatus(undefined);
+    setDetailBatchName('');
   };
-  const loadImportDetails = async (batchId: string) => {
-    setSelectedImportBatchId(batchId);
+  const openImportDetails = async (batch: ImportBatchDto, status: string) => {
+    setDetailStatus(status);
+    setDetailBatchName(batch.name);
+    setImportDetails([]);
+    setImportDetailOpen(true);
     setDetailLoading(true);
     try {
-      const res = await apiClient.get<ApiResponse<DistributionImportDetailDto[]>>(`/distribution/import-batches/${batchId}/details`);
-      setImportDetails(res.data || []);
+      const res = await apiClient.get<ApiResponse<DistributionImportDetailDto[]>>(`/distribution/import-batches/${batch.id}/details`);
+      setImportDetails((res.data || []).filter(d => d.status === status));
     } finally {
       setDetailLoading(false);
     }
@@ -202,8 +209,7 @@ export default function SalesListPage() {
           supplemented += result.supplemented || 0;
         }
         message.success(`导入完成: 新增 ${imported} 条，跳过重复 ${duplicateSkipped} 条` + (skipped > 0 ? `，跳过无效 ${skipped} 条` : '') + (supplemented > 0 ? `，补充 ${supplemented} 条` : '')); load();
-        loadImportBatches();
-        loadImportDetails(importBatchId);
+        await loadImportBatches();
         setImportStatusOpen(true);
       } catch (err: any) {
         message.error('导入失败: ' + (err?.message || '未知错误'));
@@ -297,16 +303,32 @@ export default function SalesListPage() {
           ]}
         />
       </Modal>
-      <Modal title="销售导入情况" open={importStatusOpen} onCancel={() => setImportStatusOpen(false)} footer={null} width={1120}>
-        <Space wrap style={{ marginBottom: 12 }}>
-          <Select
-            placeholder="选择一次导入"
-            style={{ width: 360 }}
-            value={selectedImportBatchId}
-            onChange={loadImportDetails}
-            options={importBatches.map(b => ({ label: `${b.name}（${b.count} 条）`, value: b.id }))}
-          />
-        </Space>
+      <Modal title="销售导入情况" open={importStatusOpen} onCancel={() => setImportStatusOpen(false)} footer={null} width={900}>
+        <Table
+          rowKey="id"
+          size="small"
+          dataSource={importBatches}
+          pagination={{ pageSize: 8, showTotal: () => `共 ${importBatches.length} 次导入` }}
+          columns={[
+            { title: '导入文件/时间', dataIndex: 'name', ellipsis: true },
+            { title: '总数', dataIndex: 'count', width: 80 },
+            {
+              title: '成功', width: 90,
+              render: (_, batch) => <Button type="link" disabled={(batch.successCount || 0) === 0} onClick={() => openImportDetails(batch, '成功')}>{batch.successCount || 0}</Button>,
+            },
+            {
+              title: '重复', width: 90,
+              render: (_, batch) => <Button type="link" disabled={(batch.duplicateCount || 0) === 0} onClick={() => openImportDetails(batch, '重复')}>{batch.duplicateCount || 0}</Button>,
+            },
+            {
+              title: '无效', width: 90,
+              render: (_, batch) => <Button type="link" danger disabled={(batch.invalidCount || 0) === 0} onClick={() => openImportDetails(batch, '无效')}>{batch.invalidCount || 0}</Button>,
+            },
+            { title: '导入时间', dataIndex: 'createdAt', width: 150, render: (v: string) => dayjs(v).format('YYYY-MM-DD HH:mm') },
+          ]}
+        />
+      </Modal>
+      <Modal title={`${detailBatchName} - ${detailStatus || ''}明细`} open={importDetailOpen} onCancel={() => setImportDetailOpen(false)} footer={null} width={1120}>
         <Table
           rowKey={(r) => r.id || `${r.importBatchId}-${r.rowNumber}-${r.status}`}
           size="small"

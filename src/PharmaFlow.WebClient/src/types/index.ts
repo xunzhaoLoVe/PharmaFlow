@@ -216,6 +216,9 @@ export interface ImportBatchDto {
   id: string;
   name: string;
   count: number;
+  successCount?: number;
+  duplicateCount?: number;
+  invalidCount?: number;
   createdAt: string;
 }
 

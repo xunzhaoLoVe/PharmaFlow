@@ -1053,6 +1053,7 @@ public class DistributionService : IDistributionService
                 Id = g.Key.Id,
                 Name = g.Key.ImportBatchName ?? "Excel导入",
                 Count = g.Count(),
+                SuccessCount = g.Count(),
                 CreatedAt = g.Min(r => r.CreatedAt),
             })
             .ToListAsync();
@@ -1066,11 +1067,26 @@ public class DistributionService : IDistributionService
                 Id = g.Key.ImportBatchId,
                 Name = g.Key.ImportBatchName,
                 Count = g.Count(),
+                SuccessCount = g.Count(d => d.Status == "成功"),
+                DuplicateCount = g.Count(d => d.Status == "重复"),
+                InvalidCount = g.Count(d => d.Status == "无效"),
                 CreatedAt = g.Min(d => d.CreatedAt),
             })
             .ToListAsync();
 
+        var detailByBatchId = detailBatches.ToDictionary(b => b.Id);
         return recordBatches
+            .Select(b =>
+            {
+                if (!detailByBatchId.TryGetValue(b.Id, out var detailBatch))
+                    return b;
+
+                b.Count = detailBatch.Count;
+                b.SuccessCount = detailBatch.SuccessCount;
+                b.DuplicateCount = detailBatch.DuplicateCount;
+                b.InvalidCount = detailBatch.InvalidCount;
+                return b;
+            })
             .Concat(detailBatches.Where(b => !recordBatchIds.Contains(b.Id)))
             .OrderByDescending(b => b.CreatedAt)
             .ToList();
@@ -1078,7 +1094,7 @@ public class DistributionService : IDistributionService
 
     public async Task<IReadOnlyList<DistributionImportDetailDto>> GetImportDetailsAsync(Guid batchId)
     {
-        return await _db.DistributionImportDetails
+        var details = await _db.DistributionImportDetails
             .Where(d => d.ImportBatchId == batchId)
             .OrderBy(d => d.RowNumber)
             .ThenBy(d => d.CreatedAt)
@@ -1102,6 +1118,38 @@ public class DistributionService : IDistributionService
                 CreatedAt = d.CreatedAt,
             })
             .ToListAsync();
+
+        if (details.Count > 0)
+            return details;
+
+        var records = await _db.DistributionRecords
+            .Include(r => r.Drug)
+            .Include(r => r.FromCustomer)
+            .Include(r => r.ToCustomer)
+            .Where(r => r.ImportBatchId == batchId && r.Operator != SummarySyncOperator)
+            .OrderBy(r => r.CreatedAt)
+            .ToListAsync();
+
+        return records.Select((r, index) => new DistributionImportDetailDto
+            {
+                Id = r.Id,
+                ImportBatchId = batchId,
+                ImportBatchName = r.ImportBatchName ?? "Excel导入",
+                IsPurchase = r.SupplierId != null,
+                RowNumber = index + 1,
+                Status = "成功",
+                Reason = "已导入",
+                DrugName = r.Drug.Name,
+                Specification = r.Drug.Specification,
+                BatchNo = r.BatchNo,
+                FromCustomerName = r.FromCustomer?.Name,
+                ToCustomerName = r.ToCustomer?.Name,
+                Quantity = r.Quantity,
+                DistributionDate = r.DistributionDateDisplay ?? r.DistributionDate.ToString("yyyy-MM-dd"),
+                Province = r.Province,
+                CreatedAt = r.CreatedAt,
+            })
+            .ToList();
     }
 
     public async Task SaveImportDetailsAsync(List<DistributionImportDetailDto> details)

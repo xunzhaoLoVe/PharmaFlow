@@ -60,6 +60,9 @@ public record ImportBatchDto
     public Guid Id { get; set; }
     public string Name { get; set; } = string.Empty;
     public int Count { get; set; }
+    public int SuccessCount { get; set; }
+    public int DuplicateCount { get; set; }
+    public int InvalidCount { get; set; }
     public DateTime CreatedAt { get; set; }
 }
 
