@@ -8,7 +8,7 @@ public interface IDistributionService
     Task<FlowGraphDto?> GetTraceAsync(string batchNo, Guid drugId);
     Task<DistributionImportResultDto> RecordDownstreamAsync(DownstreamRecordDto dto, string operatorName);
     /// <summary>批量导入下游出货记录，一次性提交</summary>
-    Task<DistributionImportResultDto> RecordDownstreamBatchAsync(List<DownstreamRecordDto> dtos, string operatorName);
+    Task<DistributionImportResultDto> RecordDownstreamBatchAsync(List<DownstreamRecordDto> dtos, string operatorName, bool deduplicateWithinBatch = true);
     Task<IReadOnlyList<DropdownItem>> GetCustomerDropdownAsync();
     Task DeleteDistributionRecordAsync(Guid recordId);
     /// <summary>清空所有流向记录和库存数据（物理删除），返回删除的流向记录条数</summary>

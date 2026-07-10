@@ -82,7 +82,7 @@ public class DistributionService : IDistributionService
     }
 
     /// <summary>批量导入下游出货记录，一次性提交（性能优化）</summary>
-    public async Task<DistributionImportResultDto> RecordDownstreamBatchAsync(List<DownstreamRecordDto> dtos, string operatorName)
+    public async Task<DistributionImportResultDto> RecordDownstreamBatchAsync(List<DownstreamRecordDto> dtos, string operatorName, bool deduplicateWithinBatch = true)
     {
         var result = new DistributionImportResultDto();
         if (dtos.Count == 0) return result;
@@ -111,7 +111,9 @@ public class DistributionService : IDistributionService
         var existingByKey = existingRecords
             .GroupBy(BuildDistributionKey, StringComparer.OrdinalIgnoreCase)
             .ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
-        var seenKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var seenKeys = deduplicateWithinBatch
+            ? new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+            : null;
 
         foreach (var dto in dtos)
         {
@@ -121,7 +123,7 @@ public class DistributionService : IDistributionService
             var distributionDate = ParseDistributionDate(dto);
             var key = BuildDistributionKey(dto.DrugId, dto.BatchNo, hasSupplier ? dto.SupplierId : null, fromCustomerId, toId, dto.Quantity, dto.DeliveryOrderNo, distributionDate, dto.Province);
 
-            if (!seenKeys.Add(key))
+            if (seenKeys != null && !seenKeys.Add(key))
             {
                 result.Skipped++;
                 continue;
@@ -147,7 +149,8 @@ public class DistributionService : IDistributionService
                 ImportBatchName = dto.ImportBatchName,
             };
             _db.DistributionRecords.Add(record);
-            existingByKey[key] = record;
+            if (deduplicateWithinBatch)
+                existingByKey[key] = record;
 
             if (!hasSupplier && fromCustomerId.HasValue)
             {

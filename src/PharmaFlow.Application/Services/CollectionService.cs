@@ -553,7 +553,10 @@ public class CollectionService : ICollectionService
 
         if (flowRows.Count > 0)
         {
-            var importResult = await _distributionService.RecordDownstreamBatchAsync(flowRows.Select(r => r.Dto).ToList(), SummarySyncOperator);
+            var importResult = await _distributionService.RecordDownstreamBatchAsync(
+                flowRows.Select(r => r.Dto).ToList(),
+                SummarySyncOperator,
+                deduplicateWithinBatch: false);
             result.CreatedDistributionRecords += importResult.Imported;
             result.SkippedRecords += importResult.Skipped;
 
@@ -571,18 +574,19 @@ public class CollectionService : ICollectionService
                     d.ToCustomerId,
                     d.Quantity,
                     d.DeliveryOrderNo,
-                    d.DistributionDate
+                    d.DistributionDate,
+                    d.Province
                 })
                 .ToListAsync();
             var distributionByKey = distributions
-                .GroupBy(d => DistributionSyncKey(d.DrugId, d.BatchNo, d.SupplierId, d.FromCustomerId, d.ToCustomerId, d.Quantity, d.DeliveryOrderNo, d.DistributionDate), StringComparer.OrdinalIgnoreCase)
-                .ToDictionary(g => g.Key, g => g.First().Id, StringComparer.OrdinalIgnoreCase);
+                .GroupBy(d => DistributionSyncKey(d.DrugId, d.BatchNo, d.SupplierId, d.FromCustomerId, d.ToCustomerId, d.Quantity, d.DeliveryOrderNo, d.DistributionDate, d.Province), StringComparer.OrdinalIgnoreCase)
+                .ToDictionary(g => g.Key, g => new Queue<Guid>(g.Select(d => d.Id)), StringComparer.OrdinalIgnoreCase);
 
             foreach (var (record, dto, distributionDate) in flowRows)
             {
                 var hasSupplier = dto.SupplierId.HasValue && dto.SupplierId != Guid.Empty;
-                var key = DistributionSyncKey(dto.DrugId, dto.BatchNo, hasSupplier ? dto.SupplierId : null, hasSupplier ? null : dto.FromCustomerId, dto.ToCustomerId, dto.Quantity, dto.DeliveryOrderNo, distributionDate);
-                if (!distributionByKey.TryGetValue(key, out var distributionId))
+                var key = DistributionSyncKey(dto.DrugId, dto.BatchNo, hasSupplier ? dto.SupplierId : null, hasSupplier ? null : dto.FromCustomerId, dto.ToCustomerId, dto.Quantity, dto.DeliveryOrderNo, distributionDate, dto.Province);
+                if (!distributionByKey.TryGetValue(key, out var distributionIds) || !distributionIds.TryDequeue(out var distributionId))
                     continue;
 
                 record.TargetEntityType = "DistributionRecord";
@@ -729,20 +733,21 @@ public class CollectionService : ICollectionService
                 d.ToCustomerId,
                 d.Quantity,
                 d.DeliveryOrderNo,
-                d.DistributionDate
+                d.DistributionDate,
+                d.Province
             })
             .ToListAsync();
 
         var distributionByKey = syncedDistributions
-            .GroupBy(d => DistributionSyncKey(d.DrugId, d.BatchNo, d.SupplierId, d.FromCustomerId, d.ToCustomerId, d.Quantity, d.DeliveryOrderNo, d.DistributionDate), StringComparer.OrdinalIgnoreCase)
-            .ToDictionary(g => g.Key, g => g.First().Id, StringComparer.OrdinalIgnoreCase);
+            .GroupBy(d => DistributionSyncKey(d.DrugId, d.BatchNo, d.SupplierId, d.FromCustomerId, d.ToCustomerId, d.Quantity, d.DeliveryOrderNo, d.DistributionDate, d.Province), StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(g => g.Key, g => g.Select(d => d.Id).ToList(), StringComparer.OrdinalIgnoreCase);
 
         var ids = new List<Guid>();
         foreach (var record in records)
         {
             var key = TryBuildDistributionSyncKey(record, drugs, customers, suppliers);
-            if (key != null && distributionByKey.TryGetValue(key, out var distributionId))
-                ids.Add(distributionId);
+            if (key != null && distributionByKey.TryGetValue(key, out var distributionIds))
+                ids.AddRange(distributionIds);
         }
 
         return ids;
@@ -805,7 +810,7 @@ public class CollectionService : ICollectionService
 
             var distributionDate = GetDateTime(root, "DistributionDate") ?? DateTime.UtcNow;
             var deliveryOrderNo = GetString(root, "DeliveryOrderNo");
-            return DistributionSyncKey(drug.Id, batchNo, supplier?.Id, fromCustomer?.Id, toCustomer.Id, quantity, deliveryOrderNo, distributionDate);
+            return DistributionSyncKey(drug.Id, batchNo, supplier?.Id, fromCustomer?.Id, toCustomer.Id, quantity, deliveryOrderNo, distributionDate, GetProvince(root));
         }
         catch
         {
@@ -1326,7 +1331,8 @@ public class CollectionService : ICollectionService
         Guid? toCustomerId,
         decimal quantity,
         string? deliveryOrderNo,
-        DateTime distributionDate)
+        DateTime distributionDate,
+        string? province = null)
         => MasterDataMatchHelper.DistributionRecordKey(
             drugId,
             batchNo,
@@ -1335,7 +1341,8 @@ public class CollectionService : ICollectionService
             toCustomerId,
             quantity,
             deliveryOrderNo,
-            distributionDate);
+            distributionDate,
+            province);
 
     private static Drug FindOrCreateDrug(
         JsonElement root,
