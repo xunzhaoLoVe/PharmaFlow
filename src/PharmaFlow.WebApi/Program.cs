@@ -132,6 +132,69 @@ using (var scope = app.Services.CreateScope())
     }
     catch { /* ignore */ }
 
+    // Excel 导入明细表：用于查询每行导入成功/重复/无效情况
+    try
+    {
+        var conn = db.Database.GetDbConnection();
+        if (conn.State != System.Data.ConnectionState.Open) conn.Open();
+        using var detailCmd = conn.CreateCommand();
+        if (dbProvider == "PostgreSQL")
+        {
+            detailCmd.CommandText = @"
+                CREATE TABLE IF NOT EXISTS ""DistributionImportDetails"" (
+                    ""Id"" uuid NOT NULL,
+                    ""ImportBatchId"" uuid NOT NULL,
+                    ""ImportBatchName"" character varying(200) NOT NULL,
+                    ""IsPurchase"" boolean NOT NULL,
+                    ""RowNumber"" integer NOT NULL,
+                    ""Status"" character varying(20) NOT NULL,
+                    ""Reason"" character varying(500) NULL,
+                    ""DrugName"" character varying(200) NULL,
+                    ""Specification"" character varying(100) NULL,
+                    ""BatchNo"" character varying(100) NULL,
+                    ""FromCustomerName"" character varying(200) NULL,
+                    ""ToCustomerName"" character varying(200) NULL,
+                    ""Quantity"" numeric(18,2) NOT NULL,
+                    ""DistributionDate"" character varying(50) NULL,
+                    ""Province"" character varying(50) NULL,
+                    ""CreatedAt"" timestamptz NOT NULL,
+                    ""UpdatedAt"" timestamptz NULL,
+                    CONSTRAINT ""PK_DistributionImportDetails"" PRIMARY KEY (""Id"")
+                );";
+            detailCmd.ExecuteNonQuery();
+            detailCmd.CommandText = @"CREATE INDEX IF NOT EXISTS ""IX_DistributionImportDetails_ImportBatchId"" ON ""DistributionImportDetails"" (""ImportBatchId"");";
+            detailCmd.ExecuteNonQuery();
+        }
+        else
+        {
+            detailCmd.CommandText = @"
+                CREATE TABLE IF NOT EXISTS DistributionImportDetails (
+                    Id TEXT NOT NULL PRIMARY KEY,
+                    ImportBatchId TEXT NOT NULL,
+                    ImportBatchName TEXT NOT NULL,
+                    IsPurchase INTEGER NOT NULL,
+                    RowNumber INTEGER NOT NULL,
+                    Status TEXT NOT NULL,
+                    Reason TEXT NULL,
+                    DrugName TEXT NULL,
+                    Specification TEXT NULL,
+                    BatchNo TEXT NULL,
+                    FromCustomerName TEXT NULL,
+                    ToCustomerName TEXT NULL,
+                    Quantity TEXT NOT NULL,
+                    DistributionDate TEXT NULL,
+                    Province TEXT NULL,
+                    CreatedAt TEXT NOT NULL,
+                    UpdatedAt TEXT NULL
+                );";
+            detailCmd.ExecuteNonQuery();
+            detailCmd.CommandText = "CREATE INDEX IF NOT EXISTS IX_DistributionImportDetails_ImportBatchId ON DistributionImportDetails (ImportBatchId);";
+            detailCmd.ExecuteNonQuery();
+        }
+        conn.Close();
+    }
+    catch { /* ignore */ }
+
     // 采集同步追踪表：EnsureCreated 不会为已存在的数据库创建新表，需按数据库类型手动建表
     try
     {

@@ -181,6 +181,27 @@ public class DistributionRecordConfiguration : IEntityTypeConfiguration<Distribu
     }
 }
 
+public class DistributionImportDetailConfiguration : IEntityTypeConfiguration<DistributionImportDetail>
+{
+    public void Configure(EntityTypeBuilder<DistributionImportDetail> builder)
+    {
+        builder.ToTable("DistributionImportDetails");
+        builder.HasKey(e => e.Id);
+        builder.Property(e => e.ImportBatchName).HasMaxLength(200).IsRequired();
+        builder.Property(e => e.Status).HasMaxLength(20).IsRequired();
+        builder.Property(e => e.Reason).HasMaxLength(500);
+        builder.Property(e => e.DrugName).HasMaxLength(200);
+        builder.Property(e => e.Specification).HasMaxLength(100);
+        builder.Property(e => e.BatchNo).HasMaxLength(100);
+        builder.Property(e => e.FromCustomerName).HasMaxLength(200);
+        builder.Property(e => e.ToCustomerName).HasMaxLength(200);
+        builder.Property(e => e.Quantity).HasColumnType("decimal(18,2)");
+        builder.Property(e => e.DistributionDate).HasMaxLength(50);
+        builder.Property(e => e.Province).HasMaxLength(50);
+        builder.HasIndex(e => e.ImportBatchId);
+    }
+}
+
 public class UserConfiguration : IEntityTypeConfiguration<User>
 {
     public void Configure(EntityTypeBuilder<User> builder)

@@ -125,6 +125,7 @@ public class DistributionService : IDistributionService
 
             if (seenKeys != null && !seenKeys.Add(key))
             {
+                AddImportDetail(dto, false, "重复", "本次导入内已有相同数据", distributionDate);
                 result.Skipped++;
                 continue;
             }
@@ -132,6 +133,7 @@ public class DistributionService : IDistributionService
             if (existingByKey.TryGetValue(key, out var existing))
             {
                 if (SupplementDistributionRecord(existing, dto, distributionDate)) result.Supplemented++;
+                AddImportDetail(dto, false, "重复", "销售/采购管理已有相同数据", distributionDate);
                 result.Skipped++;
                 continue;
             }
@@ -151,6 +153,7 @@ public class DistributionService : IDistributionService
             _db.DistributionRecords.Add(record);
             if (deduplicateWithinBatch)
                 existingByKey[key] = record;
+            AddImportDetail(dto, fromCustomerId == self.Id && record.SupplierId.HasValue, "成功", "已导入", distributionDate);
 
             if (!hasSupplier && fromCustomerId.HasValue)
             {
@@ -176,6 +179,30 @@ public class DistributionService : IDistributionService
 
         await _db.SaveChangesAsync();
         return result;
+    }
+
+    private void AddImportDetail(DownstreamRecordDto dto, bool isPurchase, string status, string reason, DateTime distributionDate)
+    {
+        if (!dto.ImportBatchId.HasValue || dto.ImportBatchId == Guid.Empty)
+            return;
+
+        _db.DistributionImportDetails.Add(new DistributionImportDetail
+        {
+            ImportBatchId = dto.ImportBatchId.Value,
+            ImportBatchName = string.IsNullOrWhiteSpace(dto.ImportBatchName) ? "Excel导入" : dto.ImportBatchName,
+            IsPurchase = isPurchase || string.IsNullOrWhiteSpace(dto.FromCustomerName),
+            RowNumber = dto.ImportRowNumber ?? 0,
+            Status = status,
+            Reason = reason,
+            DrugName = dto.DrugName,
+            Specification = dto.Specification,
+            BatchNo = dto.BatchNo,
+            FromCustomerName = dto.FromCustomerName,
+            ToCustomerName = dto.ToCustomerName,
+            Quantity = dto.Quantity,
+            DistributionDate = dto.DistributionDateDisplay ?? distributionDate.ToString("yyyy-MM-dd"),
+            Province = dto.Province,
+        });
     }
 
     private async Task PrepareMasterDataAsync(List<DownstreamRecordDto> dtos, Guid selfId)
@@ -1012,14 +1039,14 @@ public class DistributionService : IDistributionService
 
     public async Task<IReadOnlyList<ImportBatchDto>> GetImportBatchesAsync(bool isPurchase)
     {
-        var query = _db.DistributionRecords
+        var recordQuery = _db.DistributionRecords
             .Where(r => r.ImportBatchId.HasValue && r.Operator != SummarySyncOperator);
 
-        query = isPurchase
-            ? query.Where(r => r.SupplierId != null)
-            : query.Where(r => r.SupplierId == null && r.FromCustomerId != null);
+        recordQuery = isPurchase
+            ? recordQuery.Where(r => r.SupplierId != null)
+            : recordQuery.Where(r => r.SupplierId == null && r.FromCustomerId != null);
 
-        return await query
+        var recordBatches = await recordQuery
             .GroupBy(r => new { Id = r.ImportBatchId!.Value, r.ImportBatchName })
             .Select(g => new ImportBatchDto
             {
@@ -1028,8 +1055,78 @@ public class DistributionService : IDistributionService
                 Count = g.Count(),
                 CreatedAt = g.Min(r => r.CreatedAt),
             })
-            .OrderByDescending(b => b.CreatedAt)
             .ToListAsync();
+
+        var recordBatchIds = recordBatches.Select(b => b.Id).ToHashSet();
+        var detailBatches = await _db.DistributionImportDetails
+            .Where(d => d.IsPurchase == isPurchase)
+            .GroupBy(d => new { d.ImportBatchId, d.ImportBatchName })
+            .Select(g => new ImportBatchDto
+            {
+                Id = g.Key.ImportBatchId,
+                Name = g.Key.ImportBatchName,
+                Count = g.Count(),
+                CreatedAt = g.Min(d => d.CreatedAt),
+            })
+            .ToListAsync();
+
+        return recordBatches
+            .Concat(detailBatches.Where(b => !recordBatchIds.Contains(b.Id)))
+            .OrderByDescending(b => b.CreatedAt)
+            .ToList();
+    }
+
+    public async Task<IReadOnlyList<DistributionImportDetailDto>> GetImportDetailsAsync(Guid batchId)
+    {
+        return await _db.DistributionImportDetails
+            .Where(d => d.ImportBatchId == batchId)
+            .OrderBy(d => d.RowNumber)
+            .ThenBy(d => d.CreatedAt)
+            .Select(d => new DistributionImportDetailDto
+            {
+                Id = d.Id,
+                ImportBatchId = d.ImportBatchId,
+                ImportBatchName = d.ImportBatchName,
+                IsPurchase = d.IsPurchase,
+                RowNumber = d.RowNumber,
+                Status = d.Status,
+                Reason = d.Reason,
+                DrugName = d.DrugName,
+                Specification = d.Specification,
+                BatchNo = d.BatchNo,
+                FromCustomerName = d.FromCustomerName,
+                ToCustomerName = d.ToCustomerName,
+                Quantity = d.Quantity,
+                DistributionDate = d.DistributionDate,
+                Province = d.Province,
+                CreatedAt = d.CreatedAt,
+            })
+            .ToListAsync();
+    }
+
+    public async Task SaveImportDetailsAsync(List<DistributionImportDetailDto> details)
+    {
+        if (details.Count == 0) return;
+        _db.DistributionImportDetails.AddRange(details
+            .Where(d => d.ImportBatchId != Guid.Empty)
+            .Select(d => new DistributionImportDetail
+            {
+                ImportBatchId = d.ImportBatchId,
+                ImportBatchName = string.IsNullOrWhiteSpace(d.ImportBatchName) ? "Excel导入" : d.ImportBatchName,
+                IsPurchase = d.IsPurchase,
+                RowNumber = d.RowNumber,
+                Status = string.IsNullOrWhiteSpace(d.Status) ? "无效" : d.Status,
+                Reason = d.Reason,
+                DrugName = d.DrugName,
+                Specification = d.Specification,
+                BatchNo = d.BatchNo,
+                FromCustomerName = d.FromCustomerName,
+                ToCustomerName = d.ToCustomerName,
+                Quantity = d.Quantity,
+                DistributionDate = d.DistributionDate,
+                Province = d.Province,
+            }));
+        await _db.SaveChangesAsync();
     }
 
     public async Task<int> ClearImportBatchAsync(Guid batchId)
@@ -1038,7 +1135,17 @@ public class DistributionService : IDistributionService
             .Where(r => r.ImportBatchId == batchId && r.Operator != SummarySyncOperator)
             .ToListAsync();
         if (records.Count == 0)
+        {
+            var orphanDetails = await _db.DistributionImportDetails
+                .Where(d => d.ImportBatchId == batchId)
+                .ToListAsync();
+            if (orphanDetails.Count > 0)
+            {
+                _db.DistributionImportDetails.RemoveRange(orphanDetails);
+                await _db.SaveChangesAsync();
+            }
             return 0;
+        }
 
         var purchaseRecords = records.Where(r => r.SupplierId != null).ToList();
         var salesRecords = records.Where(r => r.SupplierId == null).ToList();
@@ -1046,6 +1153,10 @@ public class DistributionService : IDistributionService
         if (salesRecords.Count > 0) await ReverseSalesInventoryAsync(salesRecords);
 
         _db.DistributionRecords.RemoveRange(records);
+        var details = await _db.DistributionImportDetails
+            .Where(d => d.ImportBatchId == batchId)
+            .ToListAsync();
+        _db.DistributionImportDetails.RemoveRange(details);
         await _db.SaveChangesAsync();
         return records.Count;
     }

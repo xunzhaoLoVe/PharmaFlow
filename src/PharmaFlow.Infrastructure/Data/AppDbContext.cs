@@ -19,6 +19,7 @@ public class AppDbContext : DbContext
     public DbSet<SalesOrderItem> SalesOrderItems => Set<SalesOrderItem>();
     public DbSet<Inventory> Inventories => Set<Inventory>();
     public DbSet<DistributionRecord> DistributionRecords => Set<DistributionRecord>();
+    public DbSet<DistributionImportDetail> DistributionImportDetails => Set<DistributionImportDetail>();
     public DbSet<User> Users => Set<User>();
     public DbSet<Role> Roles => Set<Role>();
     public DbSet<SystemConfig> SystemConfigs => Set<SystemConfig>();

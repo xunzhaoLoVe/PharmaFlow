@@ -219,6 +219,25 @@ export interface ImportBatchDto {
   createdAt: string;
 }
 
+export interface DistributionImportDetailDto {
+  id?: string;
+  importBatchId: string;
+  importBatchName: string;
+  isPurchase: boolean;
+  rowNumber: number;
+  status: string;
+  reason?: string;
+  drugName?: string;
+  specification?: string;
+  batchNo?: string;
+  fromCustomerName?: string;
+  toCustomerName?: string;
+  quantity: number;
+  distributionDate?: string;
+  province?: string;
+  createdAt?: string;
+}
+
 export interface DownstreamRecordDto {
   drugId?: string;
   drugName?: string;
@@ -237,6 +256,7 @@ export interface DownstreamRecordDto {
   province?: string;
   importBatchId?: string;
   importBatchName?: string;
+  importRowNumber?: number;
 }
 
 // ── 仪表盘 ──

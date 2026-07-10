@@ -17,6 +17,8 @@ public interface IDistributionService
     Task<int> ClearSalesByOriginAsync(string origin);
     Task<int> ClearPurchasesByOriginAsync(string origin);
     Task<IReadOnlyList<ImportBatchDto>> GetImportBatchesAsync(bool isPurchase);
+    Task<IReadOnlyList<DistributionImportDetailDto>> GetImportDetailsAsync(Guid batchId);
+    Task SaveImportDetailsAsync(List<DistributionImportDetailDto> details);
     Task<int> ClearImportBatchAsync(Guid batchId);
     Task UpdateDistributionRecordAsync(Guid recordId, decimal newQuantity);
     Task<IReadOnlyList<ChannelConflictDto>> GetChannelConflictsAsync(string? batchNo = null);
@@ -58,6 +60,26 @@ public record ImportBatchDto
     public Guid Id { get; set; }
     public string Name { get; set; } = string.Empty;
     public int Count { get; set; }
+    public DateTime CreatedAt { get; set; }
+}
+
+public record DistributionImportDetailDto
+{
+    public Guid Id { get; set; }
+    public Guid ImportBatchId { get; set; }
+    public string ImportBatchName { get; set; } = string.Empty;
+    public bool IsPurchase { get; set; }
+    public int RowNumber { get; set; }
+    public string Status { get; set; } = string.Empty;
+    public string? Reason { get; set; }
+    public string? DrugName { get; set; }
+    public string? Specification { get; set; }
+    public string? BatchNo { get; set; }
+    public string? FromCustomerName { get; set; }
+    public string? ToCustomerName { get; set; }
+    public decimal Quantity { get; set; }
+    public string? DistributionDate { get; set; }
+    public string? Province { get; set; }
     public DateTime CreatedAt { get; set; }
 }
 
@@ -120,4 +142,5 @@ public record DownstreamRecordDto
     public string? DistributionDateDisplay { get; set; }
     public Guid? ImportBatchId { get; set; }
     public string? ImportBatchName { get; set; }
+    public int? ImportRowNumber { get; set; }
 }

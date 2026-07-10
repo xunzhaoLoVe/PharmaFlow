@@ -149,6 +149,23 @@ public class DistributionController : ControllerBase
         return Ok(ApiResponse<IReadOnlyList<ImportBatchDto>>.Ok(batches));
     }
 
+    [HttpGet("import-batches/{batchId:guid}/details")]
+    public async Task<ActionResult<ApiResponse<IReadOnlyList<DistributionImportDetailDto>>>> GetImportDetails(Guid batchId)
+    {
+        var details = await _distributionService.GetImportDetailsAsync(batchId);
+        return Ok(ApiResponse<IReadOnlyList<DistributionImportDetailDto>>.Ok(details));
+    }
+
+    [HttpPost("import-batches/{batchId:guid}/details")]
+    public async Task<ActionResult<ApiResponse>> SaveImportDetails(Guid batchId, [FromBody] List<DistributionImportDetailDto> details)
+    {
+        foreach (var detail in details)
+            detail.ImportBatchId = batchId;
+
+        await _distributionService.SaveImportDetailsAsync(details);
+        return Ok(ApiResponse.Ok("导入明细已保存"));
+    }
+
     [HttpDelete("import-batches/{batchId:guid}")]
     public async Task<ActionResult<ApiResponse>> ClearImportBatch(Guid batchId)
     {

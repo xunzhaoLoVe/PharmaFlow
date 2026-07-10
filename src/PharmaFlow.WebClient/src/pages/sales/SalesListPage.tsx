@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback } from 'react';
-import { Table, Button, Space, Input, Modal, Form, Select, message, Upload, DatePicker } from 'antd';
-import { PlusOutlined, UploadOutlined, DeleteOutlined, SearchOutlined } from '@ant-design/icons';
+import { Table, Button, Space, Input, Modal, Form, Select, message, Upload, DatePicker, Tag } from 'antd';
+import { PlusOutlined, UploadOutlined, DeleteOutlined, SearchOutlined, FileSearchOutlined } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
 import dayjs from 'dayjs';
 import * as XLSX from 'xlsx';
@@ -14,7 +14,7 @@ import TableFilters from '../../components/TableFilters';
 import { isDateInRange, type DateRangeValue } from '../../utils/dateRange';
 import { applyTableFilters, type TableFilterField, type TableFilterValues } from '../../utils/tableFilters';
 import { numberSorter, textSorter } from '../../utils/tableSorters';
-import type { ApiResponse, DistributionRecordDto, DropdownItem, ImportBatchDto } from '../../types';
+import type { ApiResponse, DistributionImportDetailDto, DistributionRecordDto, DropdownItem, ImportBatchDto } from '../../types';
 
 export default function SalesListPage() {
   const canWrite = useAuthStore(s => s.canWrite);
@@ -28,6 +28,10 @@ export default function SalesListPage() {
   const [toCustomers, setToCustomers] = useState<DropdownItem[]>([]);
   const [importBatches, setImportBatches] = useState<ImportBatchDto[]>([]);
   const [batchModalOpen, setBatchModalOpen] = useState(false);
+  const [importStatusOpen, setImportStatusOpen] = useState(false);
+  const [importDetails, setImportDetails] = useState<DistributionImportDetailDto[]>([]);
+  const [detailLoading, setDetailLoading] = useState(false);
+  const [selectedImportBatchId, setSelectedImportBatchId] = useState<string>();
   const [tableFilters, setTableFilters] = useState<TableFilterValues>({});
   const [dateRange, setDateRange] = useState<DateRangeValue>(null);
   const [form] = Form.useForm();
@@ -74,6 +78,22 @@ export default function SalesListPage() {
   const openBatchModal = async () => {
     await loadImportBatches();
     setBatchModalOpen(true);
+  };
+  const openImportStatusModal = async () => {
+    await loadImportBatches();
+    setImportStatusOpen(true);
+    setImportDetails([]);
+    setSelectedImportBatchId(undefined);
+  };
+  const loadImportDetails = async (batchId: string) => {
+    setSelectedImportBatchId(batchId);
+    setDetailLoading(true);
+    try {
+      const res = await apiClient.get<ApiResponse<DistributionImportDetailDto[]>>(`/distribution/import-batches/${batchId}/details`);
+      setImportDetails(res.data || []);
+    } finally {
+      setDetailLoading(false);
+    }
   };
   const handleClearBatch = async (batch: ImportBatchDto) => {
     if (!window.confirm(`确定删除「${batch.name}」这批数据？删除后会同步还原相关库存。`)) return;
@@ -123,12 +143,32 @@ export default function SalesListPage() {
         const v = (r: any, c: string | null) => c ? String(r[c] || '').trim() : '';
         const importBatchId = typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`;
         const importBatchName = `${file.name} ${dayjs().format('YYYY-MM-DD HH:mm')}`;
-        const dtos = []; let skipped = 0;
+        const dtos = []; const invalidDetails: DistributionImportDetailDto[] = []; let skipped = 0;
 
-        for (const row of rows) {
+        for (const [index, row] of rows.entries()) {
+          const rowNumber = index + 2;
           const drugVal = v(row, drugCol); const specVal = v(row, specCol);
           const fromVal = v(row, fromCol); const toVal = v(row, toCol);
-          if (!drugVal || !fromVal || !toVal) { skipped++; continue; }
+          if (!drugVal || !fromVal || !toVal) {
+            skipped++;
+            invalidDetails.push({
+              importBatchId,
+              importBatchName,
+              isPurchase: false,
+              rowNumber,
+              status: '无效',
+              reason: '缺少药品、来源或去向',
+              drugName: drugVal,
+              specification: specVal,
+              batchNo: v(row, batchCol) || '',
+              fromCustomerName: fromVal,
+              toCustomerName: toVal,
+              quantity: parseFloat(v(row, qtyCol)) || 0,
+              distributionDate: v(row, dateCol),
+              province: v(row, provCol),
+            });
+            continue;
+          }
           dtos.push({
             drugName: drugVal,
             specification: specVal,
@@ -142,9 +182,16 @@ export default function SalesListPage() {
             province: v(row, provCol),
             importBatchId,
             importBatchName,
+            importRowNumber: rowNumber,
           });
         }
-        if (dtos.length === 0) { message.warning(`无有效数据，跳过 ${skipped} 条`); return; }
+        if (invalidDetails.length > 0)
+          await apiClient.post(`/distribution/import-batches/${importBatchId}/details`, invalidDetails);
+        if (dtos.length === 0) {
+          message.warning(`无有效数据，跳过 ${skipped} 条`);
+          loadImportBatches();
+          return;
+        }
         const BATCH = 500;
         let imported = 0, duplicateSkipped = 0, supplemented = 0;
         for (let i = 0; i < dtos.length; i += BATCH) {
@@ -156,6 +203,8 @@ export default function SalesListPage() {
         }
         message.success(`导入完成: 新增 ${imported} 条，跳过重复 ${duplicateSkipped} 条` + (skipped > 0 ? `，跳过无效 ${skipped} 条` : '') + (supplemented > 0 ? `，补充 ${supplemented} 条` : '')); load();
         loadImportBatches();
+        loadImportDetails(importBatchId);
+        setImportStatusOpen(true);
       } catch (err: any) {
         message.error('导入失败: ' + (err?.message || '未知错误'));
       } finally {
@@ -229,6 +278,7 @@ export default function SalesListPage() {
         {canWrite && <Upload accept=".xlsx" showUploadList={false} beforeUpload={handleExcelImport}>
           <Button icon={<UploadOutlined />}>导入Excel</Button>
         </Upload>}
+        <Button icon={<FileSearchOutlined />} onClick={openImportStatusModal}>导入情况</Button>
         {canWrite && <Button danger icon={<DeleteOutlined />} onClick={openBatchModal}>删除数据</Button>}
       </Space>
       <Table rowKey="id" columns={columns} dataSource={tableData} loading={loading}
@@ -244,6 +294,38 @@ export default function SalesListPage() {
             { title: '记录数', dataIndex: 'count', width: 90 },
             { title: '创建时间', dataIndex: 'createdAt', width: 150, render: (v: string) => dayjs(v).format('YYYY-MM-DD HH:mm') },
             { title: '操作', width: 90, render: (_, batch) => <Button danger size="small" icon={<DeleteOutlined />} onClick={() => handleClearBatch(batch)}>删除</Button> },
+          ]}
+        />
+      </Modal>
+      <Modal title="销售导入情况" open={importStatusOpen} onCancel={() => setImportStatusOpen(false)} footer={null} width={1120}>
+        <Space wrap style={{ marginBottom: 12 }}>
+          <Select
+            placeholder="选择一次导入"
+            style={{ width: 360 }}
+            value={selectedImportBatchId}
+            onChange={loadImportDetails}
+            options={importBatches.map(b => ({ label: `${b.name}（${b.count} 条）`, value: b.id }))}
+          />
+        </Space>
+        <Table
+          rowKey={(r) => r.id || `${r.importBatchId}-${r.rowNumber}-${r.status}`}
+          size="small"
+          loading={detailLoading}
+          dataSource={importDetails}
+          scroll={{ x: 1060 }}
+          pagination={{ pageSize: 10, showTotal: () => `共 ${importDetails.length} 条明细` }}
+          columns={[
+            { title: '行号', dataIndex: 'rowNumber', width: 70 },
+            { title: '状态', dataIndex: 'status', width: 80, render: (v: string) => <Tag color={v === '成功' ? 'green' : v === '重复' ? 'orange' : 'red'}>{v}</Tag> },
+            { title: '原因', dataIndex: 'reason', width: 190, ellipsis: true },
+            { title: '药品', dataIndex: 'drugName', width: 140, ellipsis: true },
+            { title: '规格', dataIndex: 'specification', width: 110, ellipsis: true },
+            { title: '批号', dataIndex: 'batchNo', width: 110, ellipsis: true },
+            { title: '来源', dataIndex: 'fromCustomerName', width: 160, ellipsis: true },
+            { title: '去向', dataIndex: 'toCustomerName', width: 160, ellipsis: true },
+            { title: '数量', dataIndex: 'quantity', width: 90 },
+            { title: '日期', dataIndex: 'distributionDate', width: 110 },
+            { title: '省份', dataIndex: 'province', width: 90 },
           ]}
         />
       </Modal>
