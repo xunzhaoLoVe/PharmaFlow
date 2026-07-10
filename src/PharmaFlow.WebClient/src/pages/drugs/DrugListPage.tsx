@@ -1,11 +1,10 @@
 import { useEffect, useState, useCallback } from 'react';
 import { Table, Button, Space, Input, Modal, Form, message, Upload } from 'antd';
-import { DeleteOutlined, EditOutlined, PlusOutlined, SearchOutlined, UploadOutlined } from '@ant-design/icons';
+import { PlusOutlined, SearchOutlined, UploadOutlined } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
 import * as XLSX from 'xlsx';
 import { useAuthStore } from '../../store/authStore';
-import { getDrugs, createDrug, updateDrug, deleteDrug } from '../../api/drugs';
-import RowActions from '../../components/RowActions';
+import { getDrugs, createDrug } from '../../api/drugs';
 import TableFilters from '../../components/TableFilters';
 import { applyTableFilters, type TableFilterField, type TableFilterValues } from '../../utils/tableFilters';
 import { textSorter } from '../../utils/tableSorters';
@@ -17,7 +16,6 @@ export default function DrugListPage() {
   const [loading, setLoading] = useState(false);
   const [search, setSearch] = useState('');
   const [modalOpen, setModalOpen] = useState(false);
-  const [editing, setEditing] = useState<DrugDto | null>(null);
   const [tableFilters, setTableFilters] = useState<TableFilterValues>({});
   const [form] = Form.useForm();
 
@@ -32,17 +30,11 @@ export default function DrugListPage() {
   useEffect(() => { load(); }, []);
 
   const handleSearch = () => { load(search); };
-  const handleAdd = () => { setEditing(null); form.resetFields(); setModalOpen(true); };
-  const handleEdit = (record: DrugDto) => {
-    setEditing(record);
-    form.setFieldsValue({ code: record.code, name: record.name, specification: record.specification });
-    setModalOpen(true);
-  };
-  const handleDelete = async (id: string) => { await deleteDrug(id); message.success('已删除'); load(); };
+  const handleAdd = () => { form.resetFields(); setModalOpen(true); };
   const handleOk = async () => {
     const values = await form.validateFields();
-    if (editing) { await updateDrug(editing.id, values); message.success('更新成功'); }
-    else { await createDrug(values); message.success('创建成功'); }
+    await createDrug(values);
+    message.success('创建成功');
     setModalOpen(false); load();
   };
 
@@ -96,12 +88,6 @@ export default function DrugListPage() {
     { title: '规格', dataIndex: 'specification', width: 200,
       sorter: textSorter<DrugDto>(r => r.specification),
     },
-    ...(canWrite ? [{ title: '操作', width: 110, render: (_: any, r: DrugDto) => (
-        <RowActions actions={[
-          { key: 'edit', label: '编辑', icon: <EditOutlined />, tone: 'primary', onClick: () => handleEdit(r) },
-          { key: 'delete', label: '删除', icon: <DeleteOutlined />, tone: 'danger', confirmTitle: '确定删除？', onClick: () => handleDelete(r.id) },
-        ]} />),
-    }] : []),
   ];
   const filterFields: TableFilterField<DrugDto>[] = [
     { key: 'code', label: '药品编码', getValue: r => r.code },
@@ -124,7 +110,7 @@ export default function DrugListPage() {
       </Space>
       <Table rowKey="id" columns={columns} dataSource={tableData} loading={loading}
         pagination={{ defaultPageSize: 10, showTotal: () => `共 ${tableData.length} 条`, showSizeChanger: true }} />
-      <Modal title={editing ? '编辑药品' : '新增药品'} open={modalOpen} onOk={handleOk} onCancel={() => setModalOpen(false)}>
+      <Modal title="新增药品" open={modalOpen} onOk={handleOk} onCancel={() => setModalOpen(false)}>
         <Form form={form} layout="vertical">
           <Form.Item name="name" label="药品名称" rules={[{ required: true, message: '请输入药品名称' }]}><Input /></Form.Item>
           <Form.Item name="code" label="药品编码"><Input placeholder="留空自动生成" /></Form.Item>

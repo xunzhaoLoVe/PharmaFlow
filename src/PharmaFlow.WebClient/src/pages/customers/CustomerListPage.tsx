@@ -1,14 +1,13 @@
 import { useEffect, useState, useCallback } from 'react';
 import { useLocation } from 'react-router-dom';
 import { Table, Button, Space, Input, Modal, Form, message, Select, Upload } from 'antd';
-import { DeleteOutlined, EditOutlined, PlusOutlined, SearchOutlined, UploadOutlined } from '@ant-design/icons';
+import { PlusOutlined, SearchOutlined, UploadOutlined } from '@ant-design/icons';
 import { useAuthStore } from '../../store/authStore';
 import apiClient from '../../api/client';
 import type { ColumnsType } from 'antd/es/table';
 import * as XLSX from 'xlsx';
-import { getCustomers, createCustomer, updateCustomer, deleteCustomer } from '../../api/customers';
+import { getCustomers, createCustomer } from '../../api/customers';
 import { getDrugDropdown } from '../../api/drugs';
-import RowActions from '../../components/RowActions';
 import TableFilters from '../../components/TableFilters';
 import { applyTableFilters, type TableFilterField, type TableFilterValues } from '../../utils/tableFilters';
 import { textSorter } from '../../utils/tableSorters';
@@ -44,7 +43,6 @@ export default function CustomerListPage() {
   const [loading, setLoading] = useState(false);
   const [search, setSearch] = useState('');
   const [modalOpen, setModalOpen] = useState(false);
-  const [editing, setEditing] = useState<CustomerDto | null>(null);
   const [drugOptions, setDrugOptions] = useState<DropdownItem[]>([]);
   const [tableFilters, setTableFilters] = useState<TableFilterValues>({});
   const [form] = Form.useForm();
@@ -66,17 +64,10 @@ export default function CustomerListPage() {
 
   const handleSearch = () => { load(search); };
   const handleAdd = () => {
-    setEditing(null);
     form.resetFields();
     form.setFieldsValue({ customerTypeName: isDistributor ? '商业' : '医院', levelName: undefined, distributorRoleName: undefined });
     setModalOpen(true);
   };
-  const handleEdit = (record: CustomerDto) => {
-    setEditing(record);
-    form.setFieldsValue({ code: record.code, name: record.name, province: record.province || undefined, drugName: record.drugName || undefined, levelName: record.levelName || undefined, distributorRoleName: record.distributorRoleName || undefined, customerTypeName: isDistributor ? record.customerTypeName : normalizeEndType(record.customerTypeName) });
-    setModalOpen(true);
-  };
-  const handleDelete = async (id: string) => { await deleteCustomer(id); message.success('已删除'); load(); };
 
   // 去重检查
   const isDup = (name: string, province: string, drugName: string, levelName?: string, typeName?: string, distributorRoleName?: string) => {
@@ -91,7 +82,7 @@ export default function CustomerListPage() {
     if (!isDistributor) values.customerTypeName = normalizeEndType(values.customerTypeName);
     else values.customerTypeName = '商业';
     const distributorRole = isDistributor ? distributorRoleToValue(values.distributorRoleName) : null;
-    if (!editing && isDup(values.name, values.province || '', values.drugName || '', values.levelName, values.customerTypeName, values.distributorRoleName)) {
+    if (isDup(values.name, values.province || '', values.drugName || '', values.levelName, values.customerTypeName, values.distributorRoleName)) {
       message.warning('已存在相同名称、省份、药品名称、' + (isDistributor ? '机构角色、级别' : '类型') + '的客户'); return;
     }
     const dto = {
@@ -100,8 +91,8 @@ export default function CustomerListPage() {
       distributorRole,
       distributorRoleName: isDistributor ? values.distributorRoleName : '',
     };
-    if (editing) { await updateCustomer(editing.id, dto); message.success('更新成功'); }
-    else { await createCustomer(dto); message.success('创建成功'); }
+    await createCustomer(dto);
+    message.success('创建成功');
     setModalOpen(false); load();
   };
 
@@ -177,12 +168,6 @@ export default function CustomerListPage() {
     { title: '级别', dataIndex: 'levelName', width: 100,
       sorter: textSorter<CustomerDto>(r => r.levelName),
     },
-    ...(canWrite ? [{ title: '操作', width: 110, render: (_: any, r: any) => (
-        <RowActions actions={[
-          { key: 'edit', label: '编辑', icon: <EditOutlined />, tone: 'primary', onClick: () => handleEdit(r) },
-          { key: 'delete', label: '删除', icon: <DeleteOutlined />, tone: 'danger', confirmTitle: '确定删除？', onClick: () => handleDelete(r.id) },
-        ]} />),
-    }] : []),
   ];
   const endColumns: ColumnsType<CustomerDto> = [
     { title: '编码', dataIndex: 'code', width: 120, sorter: textSorter<CustomerDto>(r => r.code) },
@@ -196,12 +181,6 @@ export default function CustomerListPage() {
     { title: '类型', dataIndex: 'customerTypeName', width: 100,
       sorter: textSorter<CustomerDto>(r => r.customerTypeName),
     },
-    ...(canWrite ? [{ title: '操作', width: 110, render: (_: any, r: any) => (
-        <RowActions actions={[
-          { key: 'edit', label: '编辑', icon: <EditOutlined />, tone: 'primary', onClick: () => handleEdit(r) },
-          { key: 'delete', label: '删除', icon: <DeleteOutlined />, tone: 'danger', confirmTitle: '确定删除？', onClick: () => handleDelete(r.id) },
-        ]} />),
-    }] : []),
   ];
   const filterFields: TableFilterField<CustomerDto>[] = [
     { key: 'province', label: '省份', getValue: r => r.province },
@@ -228,15 +207,10 @@ export default function CustomerListPage() {
         {canWrite && <Upload accept=".xlsx" showUploadList={false} beforeUpload={handleExcelImport}>
           <Button icon={<UploadOutlined />}>导入Excel</Button>
         </Upload>}
-        {canWrite && <Button danger icon={<DeleteOutlined />} onClick={async () => {
-          if (window.confirm(`确定清空所有${isDistributor ? '经销商' : '终端机构'}？`)) {
-            await apiClient.delete(`/customers/clear?type=${typeFilter}`); message.success('已清空'); load();
-          }
-        }}>清空</Button>}
       </Space>
       <Table rowKey="id" columns={isDistributor ? distColumns : endColumns} dataSource={tableData} loading={loading}
         pagination={{ defaultPageSize: 10, showTotal: () => `共 ${tableData.length} 条`, showSizeChanger: true }} />
-      <Modal title={editing ? '编辑客户' : '新增客户'} open={modalOpen} onOk={handleOk} onCancel={() => setModalOpen(false)} okText="确定" cancelText="取消" className="notranslate">
+      <Modal title="新增客户" open={modalOpen} onOk={handleOk} onCancel={() => setModalOpen(false)} okText="确定" cancelText="取消" className="notranslate">
         <Form form={form} layout="vertical" className="notranslate">
           <Form.Item name="name" label="客户名称" rules={[{ required: true }]}><Input /></Form.Item>
           <Form.Item name="code" label="编码"><Input placeholder="留空自动生成" /></Form.Item>
